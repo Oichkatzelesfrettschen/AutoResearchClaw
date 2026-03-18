@@ -1,16 +1,29 @@
 """Unified literature search with deduplication.
 
-Combines results from OpenAlex, Semantic Scholar, and arXiv,
-deduplicates by DOI → arXiv ID → fuzzy title match, and returns
-a merged list sorted by citation count (descending).
+Combines results from OpenAlex, Semantic Scholar, arXiv, and a suite of
+open free-access sources. Deduplicates by DOI -> arXiv ID -> fuzzy title
+match, and returns a merged list sorted by citation count (descending).
 
-Source priority: OpenAlex (most generous limits) → Semantic Scholar → arXiv.
-If any source hits rate limits, remaining sources compensate automatically.
+Source tiers
+------------
+- Tier 0 (always-on, original): openalex, semantic_scholar, arxiv
+- Tier 1 (open, no key, no signup, PR-ready):
+    crossref, europepmc, hal, datacite, scielo, inspirehep, dblp, jstage
+- Tier 2 (optional, requires API key or registration):
+    core (CORE API key), ads (NASA ADS token), cinii (CiNii appid),
+    lens (Lens.org key), unpaywall (email param, no account)
+  Tier-2 sources are NOT in _DEFAULT_SOURCES. Pass them explicitly via the
+  ``sources`` parameter or add them to config.research.sources after
+  obtaining the relevant credential.
 
 Public API
 ----------
 - ``search_papers(query, limit, sources, year_min, deduplicate)``
-  → ``list[Paper]``
+  -> ``list[Paper]``
+- ``search_papers_parallel(query, limit, sources, year_min)``
+  -> ``list[Paper]``  (3-5x faster for 8+ sources)
+- ``search_papers_multi_query_parallel(queries, limit, sources, year_min)``
+  -> ``list[Paper]``  (fan-out across queries and sources)
 """
 
 from __future__ import annotations
@@ -30,34 +43,43 @@ from researchclaw.literature.openalex_client import search_openalex
 from researchclaw.literature.query_adapter import adapt_query
 from researchclaw.literature.semantic_scholar import search_semantic_scholar
 
-# New sources (lazy-imported in search_papers to avoid import failures
-# if any optional dependency is missing)
+# Tier 1 + Tier 2 sources, lazy-imported so missing optional deps don't
+# break the import of search.py itself.
 _NEW_SOURCE_IMPORTS: dict[str, tuple[str, str]] = {
-    "crossref": ("researchclaw.literature.crossref_client", "search_crossref"),
-    "core": ("researchclaw.literature.core_client", "search_core"),
-    "europepmc": ("researchclaw.literature.europepmc_client", "search_europepmc"),
-    "hal": ("researchclaw.literature.hal_client", "search_hal"),
-    "datacite": ("researchclaw.literature.datacite_client", "search_datacite"),
-    "scielo": ("researchclaw.literature.scielo_client", "search_scielo"),
-    "cinii": ("researchclaw.literature.cinii_client", "search_cinii"),
-    "lens": ("researchclaw.literature.lens_client", "search_lens"),
-    "ads": ("researchclaw.literature.ads_client", "search_ads"),
-    "inspirehep": ("researchclaw.literature.inspirehep_client", "search_inspirehep"),
-    "dblp": ("researchclaw.literature.dblp_client", "search_dblp"),
-    "jstage": ("researchclaw.literature.jstage_client", "search_jstage"),
+    # ---- Tier 1: open, no key, no signup ----
+    "crossref":    ("researchclaw.literature.crossref_client",   "search_crossref"),
+    "europepmc":   ("researchclaw.literature.europepmc_client",  "search_europepmc"),
+    "hal":         ("researchclaw.literature.hal_client",        "search_hal"),
+    "datacite":    ("researchclaw.literature.datacite_client",   "search_datacite"),
+    "scielo":      ("researchclaw.literature.scielo_client",     "search_scielo"),
+    "inspirehep":  ("researchclaw.literature.inspirehep_client", "search_inspirehep"),
+    "dblp":        ("researchclaw.literature.dblp_client",       "search_dblp"),
+    "jstage":      ("researchclaw.literature.jstage_client",     "search_jstage"),
+    # ---- Tier 2: requires API key or registration ----
+    # Set the relevant env var before use:
+    #   CORE_API_KEY      -> core
+    #   NASA_ADS_TOKEN    -> ads
+    #   CINII_APPID       -> cinii
+    #   LENS_API_KEY      -> lens
+    #   UNPAYWALL_EMAIL   -> unpaywall (email param, no account needed)
+    "core":        ("researchclaw.literature.core_client",       "search_core"),
+    "ads":         ("researchclaw.literature.ads_client",        "search_ads"),
+    "cinii":       ("researchclaw.literature.cinii_client",      "search_cinii"),
+    "lens":        ("researchclaw.literature.lens_client",       "search_lens"),
+    "unpaywall":   ("researchclaw.literature.unpaywall_client",  "search_unpaywall"),
 }
 
 logger = logging.getLogger(__name__)
 
-# OpenAlex first (10K/day), then S2 (1K/5min), then arXiv (1/3s),
-# then new sources ordered by rate-limit generosity.
-# All no-key sources are included by default; keyed sources (core, lens, ads)
-# are included but return empty if no key is configured.
+# Default source list: Tier 0 + all Tier 1 sources (open, no signup).
+# Tier 2 sources must be added explicitly via config.research.sources or
+# the ``sources`` parameter after configuring the required credentials.
 _DEFAULT_SOURCES = (
+    # Tier 0 (original)
     "openalex", "semantic_scholar", "arxiv",
-    "crossref", "europepmc", "core",
-    "hal", "scielo", "datacite", "cinii",
-    "ads", "inspirehep", "dblp", "jstage",
+    # Tier 1 (open, no key required)
+    "crossref", "europepmc", "hal", "datacite",
+    "scielo", "inspirehep", "dblp", "jstage",
 )
 
 

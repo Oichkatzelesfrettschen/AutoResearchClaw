@@ -170,14 +170,76 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def _build_fallback_queries(topic: str) -> list[str]:
+# ---------------------------------------------------------------------------
+# Domain expansion registry
+#
+# Maps a domain keyword (as it would appear in config.research.domains or
+# the topic string) to 1-2 high-value search queries for that domain.
+# Keys are lowercase; matching is substring-based (e.g. "manga" matches
+# "MaNGA", "ifu-manga", etc.). Users extend this via config.research.domains.
+# ---------------------------------------------------------------------------
+
+_DOMAIN_QUERY_MAP: dict[str, list[str]] = {
+    # Observational galaxy surveys
+    "manga":          ["MaNGA integral field spectroscopy rotation curve",
+                       "MaNGA IFU galaxy kinematics dark matter"],
+    "ifu":            ["IFU spectroscopy galaxy kinematics",
+                       "integral field unit survey velocity dispersion"],
+    "lotss":          ["LoTSS LOFAR low-frequency radio survey",
+                       "LoTSS DR2 radio continuum galaxy"],
+    # Dark matter and halo models
+    "rotation-curve": ["rotation curve NFW profile dark matter constraint",
+                       "galaxy rotation curve systematic uncertainty"],
+    "nfw":            ["NFW halo profile dark matter rotation curve",
+                       "Navarro-Frenk-White profile fitting"],
+    "dark-matter":    ["dark matter detection null result upper limit",
+                       "dark matter halo galaxy kinematics constraint"],
+    "null-result":    ["null result dark matter detection galaxy survey",
+                       "non-detection upper limit dark matter signal"],
+    # Algebraic / mathematical physics
+    "cayley-dickson": ["Cayley-Dickson algebra hypercomplex numbers physics",
+                       "octonion sedenion particle physics application"],
+    "octonion":       ["octonion algebra exceptional Lie group physics",
+                       "G2 octonion gauge theory"],
+    "sedenion":       ["sedenion algebra zero divisor physics",
+                       "16-dimensional hypercomplex number physics"],
+    # Formal methods
+    "formal-verification": ["formal verification proof assistant scientific computing",
+                             "Coq Rocq theorem prover physics mathematics"],
+    "rocq":           ["Rocq Coq proof assistant formal verification",
+                       "interactive theorem proving mathematics"],
+    # Cosmology
+    "cosmology":      ["dark energy equation of state observational constraint",
+                       "Pantheon supernova cosmological parameter"],
+    # Fluid simulation / LBM
+    "lbm":            ["lattice Boltzmann method fluid simulation turbulence",
+                       "LBM GPU acceleration computational fluid dynamics"],
+    # Machine learning (generic)
+    "neural":         ["neural network deep learning benchmark reproducibility",
+                       "machine learning scientific discovery"],
+}
+
+
+def _build_fallback_queries(
+    topic: str,
+    domains: tuple[str, ...] = (),
+) -> list[str]:
     """Extract meaningful search queries from a long topic string.
 
     Instead of using the raw topic as a query (which is often 200+ chars
     and returns garbage from search engines), extract noun phrases and
-    domain keywords. Returns 5-10 targeted queries. Domain-specific
-    expansions for MaNGA, Cayley-Dickson, null results, and formal
-    verification are injected first as highest-value queries.
+    domain keywords. Returns 5-10 targeted queries.
+
+    Parameters
+    ----------
+    topic:
+        The raw research topic string (often verbose).
+    domains:
+        Domain keywords from ``config.research.domains``. Each keyword is
+        looked up in ``_DOMAIN_QUERY_MAP`` for pre-built high-value queries.
+        Domains also trigger substring matching against the topic itself, so
+        a domain of ``"manga"`` matches a topic containing "MaNGA" even if
+        the config entry spelling differs.
     """
     # Split on common delimiters and extract meaningful chunks
     chunks = re.split(r"[,:;()\[\]]+", topic)
@@ -205,36 +267,26 @@ def _build_fallback_queries(topic: str) -> list[str]:
     key_terms = [w for w in words if len(w) > 3 and w not in _stop]
 
     queries: list[str] = []
-
-    # Strategy 1: Domain-specific expansions FIRST (highest value)
     topic_lower = topic.lower()
-    if "manga" in topic_lower or "ifu" in topic_lower:
-        queries.extend([
-            "MaNGA rotation curve dark matter",
-            "IFU galaxy kinematics NFW profile",
-        ])
-    if "cayley" in topic_lower or "dickson" in topic_lower:
-        queries.extend([
-            "Cayley-Dickson algebra physics",
-            "octonion sedenion particle physics",
-        ])
-    if "null result" in topic_lower or "null" in topic_lower:
-        queries.extend([
-            "null result dark matter detection galaxy",
-            "upper limit dark matter signal",
-        ])
-    if "rotation curve" in topic_lower:
-        queries.extend([
-            "rotation curve NFW profile constraint",
-            "galaxy rotation curve systematic",
-        ])
-    if any(kw in topic_lower for kw in ("formal", "verif", "proof", "rocq", "coq")):
-        queries.extend([
-            "formal verification scientific computing",
-            "proof assistant physics",
-        ])
 
-    # Strategy 2: Use meaningful chunks (up to 60 chars each)
+    # Strategy 1: Domain expansions FIRST (highest value).
+    # Check each configured domain against _DOMAIN_QUERY_MAP, and also
+    # check whether the domain keyword appears in the topic string itself.
+    active_domains: set[str] = set()
+    for d in domains:
+        active_domains.add(d.lower())
+    # Auto-detect domains from the topic so topic-only users also benefit
+    for d in _DOMAIN_QUERY_MAP:
+        core_kw = d.split("-")[0]  # "cayley-dickson" -> "cayley"
+        if core_kw in topic_lower:
+            active_domains.add(d)
+
+    for d in active_domains:
+        for q in _DOMAIN_QUERY_MAP.get(d, []):
+            if q not in queries:
+                queries.append(q)
+
+    # Strategy 2: Use meaningful chunks from the topic (up to 60 chars each)
     for chunk in chunks[:4]:
         if len(chunk) > 60:
             chunk = " ".join(chunk.split()[:6])
@@ -257,7 +309,7 @@ def _build_fallback_queries(topic: str) -> list[str]:
             seen.add(q_lower)
             unique.append(q.strip())
 
-    # Ensure we have at least 5 queries
+    # Ensure we have at least 5 queries using topic-derived suffixes
     topic_short = topic[:60].strip()
     for suffix in ("survey", "review", "benchmark", "state of the art", "recent advances"):
         if len(unique) >= 5:
@@ -1803,9 +1855,12 @@ def _execute_search_strategy(
             if isinstance(src, list):
                 sources = [item for item in src if isinstance(item, dict)]
     if plan is None:
-        # Build smart fallback queries by extracting key terms from topic
-        # instead of using the raw (often very long) topic string.
-        _fallback_queries = _build_fallback_queries(topic)
+        # Build smart fallback queries from topic + config.research.domains.
+        # Domains drive the high-value expansions; topic is mined for chunks
+        # and bigrams as a universal fallback.
+        _fallback_queries = _build_fallback_queries(
+            topic, domains=config.research.domains
+        )
         plan = {
             "topic": topic,
             "generated": _utcnow_iso(),

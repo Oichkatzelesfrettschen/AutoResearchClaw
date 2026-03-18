@@ -34,7 +34,6 @@ Public API
 from __future__ import annotations
 
 import re
-from typing import Any
 
 # ---------------------------------------------------------------------------
 # Shared Critique Methodology Framework
@@ -233,6 +232,14 @@ PERSONAS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Module-level compiled patterns (hoisted from format_critique_lessons)
+# ---------------------------------------------------------------------------
+
+_FATAL_RE = re.compile(r"\[FATAL\]\s*(.+?)(?:\n|$)")
+_EVIDENCE_RE = re.compile(r"\[EVIDENCE\?\]\s*(.+?)(?:\n|$)")
+_HEDGE_RE = re.compile(r"\[HEDGE\]\s*(.+?)(?:\n|$)")
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -292,76 +299,99 @@ def build_panel_prompt(
 ) -> tuple[str, str]:
     """Build prompts for a multi-persona panel review.
 
-    Combines multiple persona perspectives into a single prompt,
-    asking the LLM to respond as each persona in sequence.
+    Asks the LLM to respond as each named persona in sequence, each
+    separated by a clear header. The shared CRITIQUE_FRAMEWORK is appended
+    once at the end of the system prompt so it applies to all personas.
 
     Parameters
     ----------
-    draft: The paper draft text.
-    experiment_evidence: Supporting evidence.
-    prior_critiques: Prior run critiques.
-    personas: Tuple of persona names to include in the panel.
+    draft:
+        The paper draft text.
+    experiment_evidence:
+        Supporting evidence (fact-checked against claims).
+    prior_critiques:
+        Critiques from prior runs; each persona verifies they were resolved.
+    personas:
+        Persona names from PERSONAS to include. Unknown names are skipped.
 
     Returns
     -------
-    (system_prompt, user_prompt) tuple.
+    ``(system_prompt, user_prompt)`` tuple ready for ``llm.chat()``.
     """
-    panel_parts = [
+    # Each persona contributes only its own preamble (before CRITIQUE_FRAMEWORK).
+    # CRITIQUE_FRAMEWORK is appended once, shared by all.
+    panel_parts: list[str] = [
         "You are a multi-perspective review panel. "
         "Respond as EACH of the following personas in sequence, "
-        "clearly separating each review with a header.\n\n"
+        "clearly separating each review with a '## [PERSONA NAME] REVIEW' header. "
+        "Apply ALL criteria from the shared Critique Methodology for every persona.\n\n"
     ]
-
     for p in personas:
-        persona_system = PERSONAS.get(p, "")
-        if persona_system:
-            # Extract just the persona description, not the full framework
-            # (framework is shared, only include once)
-            lines = persona_system.split(CRITIQUE_FRAMEWORK)[0].strip()
-            panel_parts.append(f"### {p.upper()} PERSONA\n{lines}\n\n")
+        persona_system = PERSONAS.get(p)
+        if not persona_system:
+            continue
+        # The persona system prompt is "preamble + CRITIQUE_FRAMEWORK".
+        # Strip the shared framework — we append it once below.
+        sep = CRITIQUE_FRAMEWORK.strip()
+        preamble = persona_system.replace(sep, "").strip()
+        panel_parts.append(f"### {p.upper()} PERSONA\n{preamble}\n")
 
-    panel_parts.append(CRITIQUE_FRAMEWORK)
-
+    panel_parts.append(f"\n{CRITIQUE_FRAMEWORK}")
     system = "\n".join(panel_parts)
 
-    _, user = build_critique_prompt(
-        draft, experiment_evidence, prior_critiques, persona="board"
-    )
+    # Generic user prompt (not board-specific)
+    user_parts = [
+        "Review the following paper draft with maximum rigor.\n",
+        f"Apply all {len(personas)} personas in sequence, each with a header.\n",
+        "Tag every finding: [FATAL], [EVIDENCE?], [HEDGE], or [POLISH].\n",
+    ]
+    if prior_critiques:
+        user_parts.append(
+            "\n## Prior Review Critiques (from previous iterations)\n"
+            "Every persona must verify these issues were ADDRESSED. "
+            "If any remain unresolved, escalate severity.\n\n"
+            f"{prior_critiques}\n\n"
+        )
+    user_parts.append(f"\n## Paper Draft\n\n{draft}\n\n")
+    if experiment_evidence:
+        user_parts.append(
+            f"## Experiment Evidence (fact-check claims against this)\n\n"
+            f"{experiment_evidence}\n"
+        )
 
-    return system, user
+    return system, "\n".join(user_parts)
 
 
 def format_critique_lessons(reviews: str) -> list[str]:
     """Extract actionable lessons from critique reviews for cross-run learning.
 
     Parses [FATAL], [EVIDENCE?], [HEDGE] tags from reviews and converts
-    them into lessons that the evolution store can carry forward.
-    [POLISH] tags are intentionally excluded -- they're not worth
+    them into lessons the evolution store can carry forward to the next run.
+    [POLISH] tags are intentionally excluded — they are minor and not worth
     persisting across runs.
     """
     lessons: list[str] = []
 
-    fatal_pattern = re.compile(r"\[FATAL\]\s*(.+?)(?:\n|$)")
-    evidence_pattern = re.compile(r"\[EVIDENCE\?\]\s*(.+?)(?:\n|$)")
-    hedge_pattern = re.compile(r"\[HEDGE\]\s*(.+?)(?:\n|$)")
-
-    for match in fatal_pattern.finditer(reviews):
+    for match in _FATAL_RE.finditer(reviews):
         lessons.append(f"FATAL FLAW (prior review): {match.group(1).strip()}")
-
-    for match in evidence_pattern.finditer(reviews):
+    for match in _EVIDENCE_RE.finditer(reviews):
         lessons.append(f"Unsupported claim (prior review): {match.group(1).strip()}")
-
-    for match in hedge_pattern.finditer(reviews):
+    for match in _HEDGE_RE.finditer(reviews):
         lessons.append(f"Hedging detected (prior review): {match.group(1).strip()}")
 
     return lessons
 
 
+# Descriptions mirror the persona preambles above; kept as a lightweight
+# registry so callers can present options without importing the full prompts.
+PERSONA_DESCRIPTIONS: dict[str, str] = {
+    "board":    "Scathing academic panel -- terse imperatives, zero hedging tolerance",
+    "balanced": "Three-perspective reviewer (methodology, domain, statistics)",
+    "tank":     "Silicon Valley VC panel -- commercialization and impact evaluation",
+    "bros":     "Tech-bro startup CEOs -- same rigor, venture-speak translation",
+}
+
+
 def available_personas() -> dict[str, str]:
-    """Return {name: one-line description} for all available personas."""
-    return {
-        "board": "Scathing academic panel -- terse imperatives, zero hedging tolerance",
-        "balanced": "Three-perspective reviewer (methodology, domain, statistics)",
-        "tank": "Silicon Valley VC panel -- commercialization and impact evaluation",
-        "bros": "Tech-bro startup CEOs -- same rigor, venture-speak translation",
-    }
+    """Return ``{name: one-line description}`` for all registered personas."""
+    return dict(PERSONA_DESCRIPTIONS)
