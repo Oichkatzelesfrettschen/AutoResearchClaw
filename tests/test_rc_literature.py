@@ -23,11 +23,15 @@ from researchclaw.literature.arxiv_client import (
     search_arxiv,
 )
 from researchclaw.literature.search import (
+    _EXTENDED_SOURCES,
+    _ORIGINAL_SOURCES,
     _deduplicate,
     _normalise_title,
     papers_to_bibtex,
     search_papers,
     search_papers_multi_query,
+    search_papers_multi_query_parallel,
+    search_papers_parallel,
 )
 
 
@@ -462,12 +466,16 @@ class TestSearchPapers:
         # Should be sorted by citation_count desc
         assert papers[0].citation_count >= papers[1].citation_count
 
-    def test_default_sources_openalex_first(self) -> None:
-        """OpenAlex should be the primary (first) source — least restrictive limits."""
+    def test_default_sources_original_only(self) -> None:
+        """_DEFAULT_SOURCES must equal _ORIGINAL_SOURCES for backward compatibility."""
         from researchclaw.literature.search import _DEFAULT_SOURCES
+        assert _DEFAULT_SOURCES == _ORIGINAL_SOURCES
         assert _DEFAULT_SOURCES[0] == "openalex"
         assert "semantic_scholar" in _DEFAULT_SOURCES
         assert "arxiv" in _DEFAULT_SOURCES
+        # New sources are opt-in via _EXTENDED_SOURCES, not in default.
+        assert "crossref" not in _DEFAULT_SOURCES
+        assert "crossref" in _EXTENDED_SOURCES
 
     def test_s2_failure_does_not_block_others(
         self, monkeypatch: pytest.MonkeyPatch
@@ -730,11 +738,13 @@ class TestOpenAlex:
 
     def test_openalex_network_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Should return empty list on network error."""
+        import urllib.error as _ue
+
         from researchclaw.literature.openalex_client import search_openalex
 
         monkeypatch.setattr(
             "researchclaw.literature.openalex_client.urllib.request.urlopen",
-            lambda *a, **kw: (_ for _ in ()).throw(urllib.error.URLError("timeout")),
+            lambda *a, **kw: (_ for _ in ()).throw(_ue.URLError("timeout")),
         )
         monkeypatch.setattr(
             "researchclaw.literature.openalex_client.time.sleep", lambda _: None,
@@ -808,3 +818,117 @@ class TestCacheTTL:
 
 
 import urllib.error
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Parallel search tests
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestParallelSearch:
+    def test_parallel_fans_out_to_all_sources(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """search_papers_parallel must call each requested source exactly once."""
+        called: list[str] = []
+
+        def mock_search(query: str, *, sources: Any = (), **kw: Any) -> list[Paper]:
+            called.extend(sources)
+            return []
+
+        monkeypatch.setattr("researchclaw.literature.search.search_papers", mock_search)
+
+        search_papers_parallel(
+            "test", sources=("openalex", "arxiv", "crossref"), max_workers=3
+        )
+        assert sorted(called) == ["arxiv", "crossref", "openalex"]
+
+    def test_parallel_deduplicates_like_serial(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Parallel results deduplicate by DOI the same way serial search does."""
+        shared = _make_paper(doi="10.1/shared", citation_count=10, source="openalex")
+        dup = _make_paper(doi="10.1/shared", citation_count=5, source="crossref")
+
+        def mock_search(query: str, *, sources: Any = (), **kw: Any) -> list[Paper]:
+            return [shared] if "openalex" in sources else [dup]
+
+        monkeypatch.setattr("researchclaw.literature.search.search_papers", mock_search)
+
+        results = search_papers_parallel(
+            "test", sources=("openalex", "crossref"), deduplicate=True, max_workers=2
+        )
+        assert len(results) == 1
+        assert results[0].citation_count == 10  # higher-cited version wins
+
+    def test_parallel_per_source_failure_does_not_raise(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A per-source exception must not propagate; other sources still return."""
+        good = _make_paper(
+            paper_id="good-1", title="Good Paper", doi="10.1/good", arxiv_id="1111.0001"
+        )
+
+        def mock_search(query: str, *, sources: Any = (), **kw: Any) -> list[Paper]:
+            if "arxiv" in sources:
+                raise RuntimeError("arxiv down")
+            return [good]
+
+        monkeypatch.setattr("researchclaw.literature.search.search_papers", mock_search)
+
+        results = search_papers_parallel(
+            "test", sources=("openalex", "arxiv"), max_workers=2
+        )
+        assert any(p.doi == "10.1/good" for p in results)
+
+    def test_parallel_results_sorted_desc(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Results must be sorted citation_count descending after merge."""
+        papers = [
+            _make_paper(paper_id=f"p{i}", title=f"Paper {i}", doi=f"10.1/{i}",
+                        arxiv_id=f"0000.{i:05d}", citation_count=i * 10)
+            for i in range(1, 5)
+        ]
+        idx = 0
+
+        def mock_search(query: str, *, sources: Any = (), **kw: Any) -> list[Paper]:
+            nonlocal idx
+            result = [papers[idx % len(papers)]]
+            idx += 1
+            return result
+
+        monkeypatch.setattr("researchclaw.literature.search.search_papers", mock_search)
+
+        results = search_papers_parallel(
+            "test",
+            sources=("openalex", "arxiv", "crossref", "hal"),
+            max_workers=4,
+        )
+        counts = [p.citation_count for p in results]
+        assert counts == sorted(counts, reverse=True)
+
+    def test_multi_query_parallel_runs_once_per_query(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """search_papers_multi_query_parallel fans out across all queries."""
+        query_log: list[str] = []
+
+        def mock_parallel(query: str, **kw: Any) -> list[Paper]:
+            query_log.append(query)
+            return [
+                _make_paper(
+                    paper_id=f"p-{query}",
+                    title=f"Paper for {query}",
+                    doi=f"10.1/{query}",
+                    arxiv_id=f"0000.{abs(hash(query)) % 99999:05d}",
+                )
+            ]
+
+        monkeypatch.setattr(
+            "researchclaw.literature.search.search_papers_parallel", mock_parallel
+        )
+
+        results = search_papers_multi_query_parallel(["q1", "q2", "q3"])
+        assert query_log == ["q1", "q2", "q3"]
+        assert len(results) == 3  # all unique
