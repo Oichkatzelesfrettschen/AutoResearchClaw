@@ -5401,14 +5401,37 @@ def _execute_result_analysis(
                         _all_equal = False
                         break
                 if _all_equal and _shared_keys:
-                    _warn = (
-                        f"ABLATION FAILURE: Conditions '{_c1}' and '{_c2}' produce "
-                        f"identical outputs across all {len(_shared_keys)} metrics. "
-                        f"The ablation is invalid — the differentiating parameter "
-                        f"is likely not used in the code."
+                    # Check if identical outputs are EXPECTED: null-result experiment
+                    # (the non-detection IS the finding) or ablation-as-control pair.
+                    _topic_lower = config.research.topic.lower() if config else ""
+                    _is_null_result = any(
+                        kw in _topic_lower
+                        for kw in ("null result", "null detection", "upper limit",
+                                   "non-detection", "negative result", "no signal",
+                                   "falsif", "no evidence")
                     )
-                    _ablation_warnings.append(_warn)
-                    logger.warning("P8: %s", _warn)
+                    _is_control_pair = any(
+                        kw in _c1.lower() or kw in _c2.lower()
+                        for kw in ("ablation", "control", "baseline", "null",
+                                   "no_harmonic", "single_mode")
+                    )
+                    if _is_null_result or _is_control_pair:
+                        _warn = (
+                            f"NULL RESULT NOTE: Conditions '{_c1}' and '{_c2}' produce "
+                            f"identical outputs across all {len(_shared_keys)} metrics. "
+                            f"For null-result experiments this is EXPECTED — the absence "
+                            f"of differentiation IS the finding."
+                        )
+                        logger.info("P8: %s", _warn)
+                    else:
+                        _warn = (
+                            f"ABLATION FAILURE: Conditions '{_c1}' and '{_c2}' produce "
+                            f"identical outputs across all {len(_shared_keys)} metrics. "
+                            f"The ablation is invalid — the differentiating parameter "
+                            f"is likely not used in the code."
+                        )
+                        _ablation_warnings.append(_warn)
+                        logger.warning("P8: %s", _warn)
                 elif _shared_keys:
                     # R5-BUG-03: Also flag near-identical conditions (< 1% relative diff)
                     _near_identical = True
@@ -5460,13 +5483,27 @@ def _execute_result_analysis(
                 if isinstance(_pv, (int, float)):
                     _primary_vals.append(_pv)
         if len(_primary_vals) >= 2 and len(set(_primary_vals)) == 1:
-            _zv_warn = (
-                f"ZERO VARIANCE: All {len(_primary_vals)} conditions have "
-                f"identical primary_metric ({_primary_vals[0]}). "
-                f"Experiment condition wiring is likely broken."
+            _topic_lower = config.research.topic.lower() if config else ""
+            _is_null = any(
+                kw in _topic_lower
+                for kw in ("null result", "null detection", "upper limit",
+                           "non-detection", "negative result", "no signal",
+                           "falsif", "no evidence")
             )
-            _ablation_warnings.append(_zv_warn)
-            logger.warning("R13-1: %s", _zv_warn)
+            if _is_null:
+                logger.info(
+                    "R13-1: All %d conditions have identical primary_metric "
+                    "(%s) — expected for null-result experiment.",
+                    len(_primary_vals), _primary_vals[0],
+                )
+            else:
+                _zv_warn = (
+                    f"ZERO VARIANCE: All {len(_primary_vals)} conditions have "
+                    f"identical primary_metric ({_primary_vals[0]}). "
+                    f"Experiment condition wiring is likely broken."
+                )
+                _ablation_warnings.append(_zv_warn)
+                logger.warning("R13-1: %s", _zv_warn)
 
     if _ablation_warnings:
         summary_payload["ablation_warnings"] = _ablation_warnings
