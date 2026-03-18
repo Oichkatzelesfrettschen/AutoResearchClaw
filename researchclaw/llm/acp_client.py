@@ -40,6 +40,7 @@ class ACPConfig:
     acpx_command: str = ""  # auto-detect if empty
     session_name: str = "researchclaw"
     timeout_sec: int = 1800  # per-prompt timeout
+    model: str = ""  # agent model id (e.g. "opus", "sonnet"); empty = agent default
 
 
 def _find_acpx() -> str | None:
@@ -85,6 +86,7 @@ class ACPClient:
             acpx_command=getattr(acp, "acpx_command", ""),
             session_name=getattr(acp, "session_name", "researchclaw"),
             timeout_sec=getattr(acp, "timeout_sec", 1800),
+            model=getattr(acp, "model", ""),
         ))
 
     # ------------------------------------------------------------------
@@ -203,7 +205,7 @@ class ACPClient:
             [acpx, "--ttl", "0", "--cwd", self._abs_cwd(),
              self.config.agent, "sessions", "ensure",
              "--name", self.config.session_name],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=60,
         )
         if result.returncode != 0:
             # Fall back to 'new'
@@ -211,7 +213,7 @@ class ACPClient:
                 [acpx, "--ttl", "0", "--cwd", self._abs_cwd(),
                  self.config.agent, "sessions", "new",
                  "--name", self.config.session_name],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, timeout=60,
             )
             if result.returncode != 0:
                 raise RuntimeError(
@@ -222,7 +224,6 @@ class ACPClient:
 
     # Linux MAX_ARG_STRLEN is 128KB; stay well under to leave room for env
     _MAX_CLI_PROMPT_BYTES = 100_000
-
     # Error patterns that indicate a dead/stale session (retryable)
     _RECONNECT_ERRORS = (
         "agent needs reconnect",
@@ -283,12 +284,18 @@ class ACPClient:
             pass
         self._session_ready = False
 
+    def _base_cmd(self, acpx: str) -> list[str]:
+        """Build the common acpx command prefix, injecting --model if configured."""
+        cmd = [acpx, "--approve-all", "--ttl", "0", "--cwd", self._abs_cwd()]
+        if self.config.model:
+            cmd.extend(["--model", self.config.model])
+        cmd.extend([self.config.agent, "-s", self.config.session_name])
+        return cmd
+
     def _send_prompt_cli(self, acpx: str, prompt: str) -> str:
         """Send prompt as a CLI argument (original path)."""
         result = subprocess.run(
-            [acpx, "--approve-all", "--ttl", "0", "--cwd", self._abs_cwd(),
-             self.config.agent, "-s", self.config.session_name,
-             prompt],
+            self._base_cmd(acpx) + [prompt],
             capture_output=True, text=True,
             timeout=self.config.timeout_sec,
         )
@@ -316,9 +323,7 @@ class ACPClient:
             )
 
             result = subprocess.run(
-                [acpx, "--approve-all", "--ttl", "0", "--cwd", self._abs_cwd(),
-                 self.config.agent, "-s", self.config.session_name,
-                 short_prompt],
+                self._base_cmd(acpx) + [short_prompt],
                 capture_output=True, text=True,
                 timeout=self.config.timeout_sec,
             )

@@ -175,7 +175,9 @@ def _build_fallback_queries(topic: str) -> list[str]:
 
     Instead of using the raw topic as a query (which is often 200+ chars
     and returns garbage from search engines), extract noun phrases and
-    domain keywords. Returns 5-10 targeted queries.
+    domain keywords. Returns 5-10 targeted queries. Domain-specific
+    expansions for MaNGA, Cayley-Dickson, null results, and formal
+    verification are injected first as highest-value queries.
     """
     # Split on common delimiters and extract meaningful chunks
     chunks = re.split(r"[,:;()\[\]]+", topic)
@@ -197,21 +199,49 @@ def _build_fallback_queries(topic: str) -> list[str]:
         "over", "across", "multiple", "three", "result", "comprehensive",
         "using", "based", "between", "various", "different", "several",
         "parameter", "parameters", "analysis", "approach", "method",
-        "framework", "frameworks",
+        "framework", "frameworks", "algebraic",
     }
     words = topic.lower().split()
     key_terms = [w for w in words if len(w) > 3 and w not in _stop]
 
     queries: list[str] = []
 
-    # Strategy 1: Use meaningful chunks (up to 60 chars each)
+    # Strategy 1: Domain-specific expansions FIRST (highest value)
+    topic_lower = topic.lower()
+    if "manga" in topic_lower or "ifu" in topic_lower:
+        queries.extend([
+            "MaNGA rotation curve dark matter",
+            "IFU galaxy kinematics NFW profile",
+        ])
+    if "cayley" in topic_lower or "dickson" in topic_lower:
+        queries.extend([
+            "Cayley-Dickson algebra physics",
+            "octonion sedenion particle physics",
+        ])
+    if "null result" in topic_lower or "null" in topic_lower:
+        queries.extend([
+            "null result dark matter detection galaxy",
+            "upper limit dark matter signal",
+        ])
+    if "rotation curve" in topic_lower:
+        queries.extend([
+            "rotation curve NFW profile constraint",
+            "galaxy rotation curve systematic",
+        ])
+    if any(kw in topic_lower for kw in ("formal", "verif", "proof", "rocq", "coq")):
+        queries.extend([
+            "formal verification scientific computing",
+            "proof assistant physics",
+        ])
+
+    # Strategy 2: Use meaningful chunks (up to 60 chars each)
     for chunk in chunks[:4]:
         if len(chunk) > 60:
             chunk = " ".join(chunk.split()[:6])
         if chunk and chunk not in queries:
             queries.append(chunk)
 
-    # Strategy 2: Bigrams of key terms
+    # Strategy 3: Bigrams of key terms (skip punctuation artifacts)
     clean_terms = [t for t in key_terms if re.match(r"^[a-z]", t) and ":" not in t]
     for i in range(min(len(clean_terms) - 1, 4)):
         bigram = f"{clean_terms[i]} {clean_terms[i + 1]}"
@@ -227,7 +257,7 @@ def _build_fallback_queries(topic: str) -> list[str]:
             seen.add(q_lower)
             unique.append(q.strip())
 
-    # Ensure we have at least a few useful queries
+    # Ensure we have at least 5 queries
     topic_short = topic[:60].strip()
     for suffix in ("survey", "review", "benchmark", "state of the art", "recent advances"):
         if len(unique) >= 5:
@@ -238,6 +268,7 @@ def _build_fallback_queries(topic: str) -> list[str]:
             unique.append(candidate)
 
     return unique[:10]
+
 
 
 def _write_stage_meta(
@@ -368,10 +399,15 @@ def _extract_yaml_block(text: str) -> str:
     Strips [thinking] blocks, insight blocks, and other ACP artifacts
     before looking for YAML in markdown fences or raw text.
     """
-    # Strip ACP noise: [thinking]..., insight blocks, [plan]...
+    # Strip ACP noise: [thinking]..., insight/plan blocks
     cleaned = re.sub(
         r"\[thinking\].*?(?=\n```|\n[A-Z]|\Z)",
         "", text, flags=re.DOTALL,
+    )
+    # Strip Claude Code insight blocks (backtick-delimited headers)
+    cleaned = re.sub(
+        r"`[*] Insight[^`]*`\n.*?`[-]+`",
+        "", cleaned, flags=re.DOTALL,
     )
     cleaned = re.sub(r"\[plan\].*?\n\n", "", cleaned, flags=re.DOTALL)
 
@@ -410,6 +446,7 @@ def _extract_yaml_block(text: str) -> str:
     if yaml_lines:
         return "\n".join(yaml_lines).strip()
 
+
     return text.strip()
 
 
@@ -418,6 +455,8 @@ def _safe_json_loads(text: str, default: Any) -> Any:
 
     Tries multiple strategies: direct parse, markdown fence extraction,
     balanced brace matching (largest dict wins), and array brackets.
+    ACP responses often surround JSON with thinking blocks, tool calls,
+    and markdown — this function peels all of that away.
     """
     if not text or not text.strip():
         return default
@@ -437,7 +476,7 @@ def _safe_json_loads(text: str, default: Any) -> Any:
         except (json.JSONDecodeError, ValueError):
             continue
 
-    # Strategy 3: Find outermost balanced braces
+    # Strategy 3: Find outermost balanced braces (largest candidate wins)
     brace_depth = 0
     start = -1
     candidates: list[str] = []
@@ -452,7 +491,6 @@ def _safe_json_loads(text: str, default: Any) -> Any:
                 candidates.append(text[start : i + 1])
                 start = -1
 
-    # Try candidates from largest to smallest
     candidates.sort(key=len, reverse=True)
     for candidate in candidates:
         try:
@@ -488,24 +526,40 @@ _METACLAW_SKILLS_DIR = str(Path.home() / ".metaclaw" / "skills")
 
 
 def _get_evolution_overlay(run_dir: Path | None, stage_name: str) -> str:
-    """Load evolution lessons + MetaClaw skills for prompt injection.
+    """Load evolution lessons + MetaClaw skills + cross-run context for prompt injection.
 
     Combines intra-run lessons (from current run's evolution dir) with
-    cross-run arc-* skills (from ~/.metaclaw/skills/).
+    cross-run arc-* skills (from ~/.metaclaw/skills/) and prior-run
+    context (hypotheses, syntheses, lessons from prior runs on same topic).
 
     Returns empty string if no relevant lessons/skills exist or on any error.
     """
     if run_dir is None:
         return ""
+    parts: list[str] = []
     try:
         from researchclaw.evolution import EvolutionStore
 
         store = EvolutionStore(run_dir / "evolution")
-        return store.build_overlay(
+        overlay = store.build_overlay(
             stage_name, max_lessons=5, skills_dir=_METACLAW_SKILLS_DIR
         )
+        if overlay:
+            parts.append(overlay)
     except Exception:  # noqa: BLE001
-        return ""
+        pass
+
+    # Inject cross-run prior context if available
+    try:
+        prior_ctx_path = run_dir / "prior_context.md"
+        if prior_ctx_path.is_file():
+            prior_text = prior_ctx_path.read_text(encoding="utf-8")
+            if prior_text.strip():
+                parts.append(prior_text)
+    except Exception:  # noqa: BLE001
+        pass
+
+    return "\n\n".join(parts)
 
 
 def _chat_with_prompt(
@@ -2008,7 +2062,7 @@ def _execute_literature_collect(
 
     try:
         from researchclaw.literature.search import (
-            search_papers_multi_query,
+            search_papers_multi_query_parallel as search_papers_multi_query,
             papers_to_bibtex,
         )
 
@@ -2804,36 +2858,72 @@ def _execute_experiment_design(
                     "Stage 09: Extracted names from hypotheses: methods=%s, baselines=%s",
                     _method_candidates[:3], _baseline_candidates[:3],
                 )
+                # Extract dataset names from hypothesis text too
+                _dataset_candidates = _re_hyp.findall(
+                    r"(?:dataset|data|corpus|benchmark|catalog|survey)[:\s]+[\"']?([A-Za-z][\w-]+)",
+                    _hyp_text, _re_hyp.IGNORECASE,
+                )
+                # Extract metric names
+                _metric_candidates = _re_hyp.findall(
+                    r"(?:metric|measure|score|accuracy|precision|recall|SNR|RMS|AUC|F1)[:\s]+[\"']?([A-Za-z][\w-]*)",
+                    _hyp_text, _re_hyp.IGNORECASE,
+                )
                 plan = {
                     "topic": config.research.topic,
                     "generated": _utcnow_iso(),
                     "objectives": ["Evaluate hypotheses with controlled experiments"],
-                    "datasets": ["primary_dataset"],
-                    "baselines": _baseline_candidates[:3] or ["baseline_1", "baseline_2"],
-                    "proposed_methods": _method_candidates[:3] or ["proposed_method"],
-                    "ablations": ["without_key_component", "simplified_version"],
-                    "metrics": [config.experiment.metric_key, "secondary_metric"],
-                    "risks": ["validity threats", "confounding variables"],
+                    "datasets": _dataset_candidates[:3] or [f"{config.research.topic.split()[0]}_dataset"],
+                    "baselines": _baseline_candidates[:3] or [f"{config.research.topic.split()[0]}_baseline"],
+                    "proposed_methods": _method_candidates[:3] or [f"{config.research.topic.split()[0]}_proposed"],
+                    "ablations": ["without_key_component", "reduced_scope"],
+                    "metrics": _metric_candidates[:3] or [config.experiment.metric_key],
+                    "risks": ["systematic biases", "coverage limitations"],
                     "compute_budget": {"max_gpu": 1, "max_hours": 4},
                 }
 
     if plan is None:
-        # BUG-12: Use domain-aware names instead of fully generic placeholders
-        _topic_prefix = config.research.topic.split()[0] if config.research.topic else "method"
+        # Build domain-aware fallback from topic content
+        _topic_lower = config.research.topic.lower()
         logger.warning(
             "Stage 09: LLM failed to produce valid experiment plan YAML. "
-            "Using topic-derived fallback."
+            "Using domain-aware fallback."
         )
+        # Extract domain signals from topic
+        _datasets = ["primary_dataset"]
+        _baselines = ["standard_baseline"]
+        _methods = ["proposed_method"]
+        _ablations = ["without_key_component"]
+        _metrics = [config.experiment.metric_key]
+
+        if "manga" in _topic_lower or "rotation curve" in _topic_lower:
+            _datasets = ["MaNGA_DR17_rotcurves", "manga_stack_D16"]
+            _baselines = ["NFW_profile_only", "baryonic_model"]
+            _methods = ["harmonic_halo_stacking", "multi_algebra_DFT"]
+            _ablations = ["without_inclination_correction", "single_CD_dimension"]
+            _metrics = ["SNR", "RMS_residual", "detection_threshold"]
+        elif "cayley" in _topic_lower or "sedenion" in _topic_lower:
+            _datasets = ["CD_dimension_sweep", "partner_graph_spectrum"]
+            _baselines = ["quaternion_baseline", "octonion_baseline"]
+            _methods = ["sedenion_analysis", "dim_tower_sweep"]
+            _ablations = ["single_dimension", "without_zero_divisors"]
+            _metrics = ["eigenvalue_degeneracy", "flat_band_fraction"]
+        elif "lotss" in _topic_lower or "radio" in _topic_lower:
+            _datasets = ["LoTSS_DR2", "MaNGA_crossmatch"]
+            _baselines = ["flux_threshold_only"]
+            _methods = ["kinematic_bisection", "ultrametric_clustering"]
+            _ablations = ["without_radio_data", "single_frequency"]
+            _metrics = ["detection_fraction", "correlation_coefficient"]
+
         plan = {
             "topic": config.research.topic,
             "generated": _utcnow_iso(),
             "objectives": ["Evaluate hypotheses with controlled experiments"],
-            "datasets": ["primary_dataset", "secondary_dataset"],
-            "baselines": [f"{_topic_prefix}_baseline_1", f"{_topic_prefix}_baseline_2"],
-            "proposed_methods": [f"{_topic_prefix}_proposed", f"{_topic_prefix}_variant"],
-            "ablations": ["without_key_component", "simplified_version"],
-            "metrics": [config.experiment.metric_key, "secondary_metric"],
-            "risks": ["validity threats", "confounding variables"],
+            "datasets": _datasets,
+            "baselines": _baselines,
+            "proposed_methods": _methods,
+            "ablations": _ablations,
+            "metrics": _metrics,
+            "risks": ["systematic biases", "coverage limitations", "model assumptions"],
             "compute_budget": {"max_gpu": 1, "max_hours": 4},
         }
     # ── BA: BenchmarkAgent — intelligent dataset/baseline selection ──────

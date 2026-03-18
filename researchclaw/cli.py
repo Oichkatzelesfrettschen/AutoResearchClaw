@@ -155,7 +155,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     topic = cast(str | None, args.topic)
     output = cast(str | None, args.output)
     from_stage_name = cast(str | None, args.from_stage)
-    auto_approve = cast(bool, args.auto_approve)
+    auto_approve_cli = cast(bool, args.auto_approve)
     skip_preflight = cast(bool, args.skip_preflight)
     resume = cast(bool, args.resume)
     skip_noncritical = cast(bool, args.skip_noncritical_stage)
@@ -171,17 +171,18 @@ def cmd_run(args: argparse.Namespace) -> int:
         new_research = _dc_gd.replace(config.research, graceful_degradation=False)
         config = _dc_gd.replace(config, research=new_research)
 
-    # Derive gate behavior from project.mode (CLI --auto-approve overrides)
-    mode = config.project.mode.lower()
-    if auto_approve:
-        # Explicit CLI flag takes precedence over config mode
-        stop_on_gate = False
-    elif mode == "full-auto":
+    # Derive gate behavior from project.mode, CLI --auto-approve overrides
+    project_mode = config.project.mode
+    if auto_approve_cli or project_mode == "full-auto":
         auto_approve = True
         stop_on_gate = False
-    else:
-        # "semi-auto" and "docs-first" should block on gates
+    elif project_mode == "semi-auto":
+        auto_approve = False
         stop_on_gate = True
+    else:  # "docs-first" or unknown
+        auto_approve = False
+        stop_on_gate = True
+
 
     if topic:
         import dataclasses
@@ -239,7 +240,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"  Run ID:  {run_id}")
     print(f"  Topic:   {config.research.topic}")
     print(f"  Output:  {run_dir}")
-    print(f"  Mode:    {config.project.mode}")
+    print(f"  Mode:    {project_mode} (experiment: {config.experiment.mode})")
+    print(f"  Gates:   {'auto-approve' if auto_approve else 'HITL blocking'}")
     print(f"  From:    Stage {int(from_stage)}: {from_stage.name}")
 
     # Hint: OpenCode beast mode

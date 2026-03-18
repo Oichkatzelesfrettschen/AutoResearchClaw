@@ -11,6 +11,16 @@ from pathlib import Path
 
 from researchclaw.adapters import AdapterBundle
 from researchclaw.config import RCConfig
+from researchclaw.cross_run import (
+    RunRecord,
+    RunRegistry,
+    extract_prior_context,
+    format_prior_context_for_prompt,
+    index_shortlisted_papers,
+    check_quality_regression,
+    _topic_hash,
+    _utcnow_iso as _cr_utcnow,
+)
 from researchclaw.evolution import EvolutionStore, extract_lessons
 from researchclaw.knowledge.base import write_stage_to_kb
 from researchclaw.pipeline.executor import StageResult, execute_stage
@@ -205,6 +215,39 @@ def execute_pipeline(
 ) -> list[StageResult]:
     """Execute pipeline stages sequentially from `from_stage` and write summary."""
 
+    # --- Cross-run learning: register this run and extract prior context ---
+    _run_registry = RunRegistry()
+    try:
+        _run_registry.register_run(RunRecord(
+            run_id=run_id,
+            topic=config.research.topic,
+            topic_hash=_topic_hash(config.research.topic),
+            run_dir=str(run_dir),
+            started=_cr_utcnow(),
+        ))
+    except Exception:  # noqa: BLE001
+        logger.debug("Cross-run registry write failed (non-blocking)")
+
+    _prior_context_text = ""
+    try:
+        _prior_ctx = extract_prior_context(
+            config.research.topic, run_id, registry=_run_registry
+        )
+        _prior_context_text = format_prior_context_for_prompt(_prior_ctx)
+        if _prior_ctx.run_count > 0:
+            logger.info(
+                "Cross-run: found %d prior runs, %d prior papers, %d lessons",
+                _prior_ctx.run_count,
+                len(_prior_ctx.prior_shortlisted_papers),
+                len(_prior_ctx.prior_lessons),
+            )
+            # Write prior context to run dir for debugging
+            (run_dir / "prior_context.md").write_text(
+                _prior_context_text, encoding="utf-8"
+            )
+    except Exception:  # noqa: BLE001
+        logger.debug("Cross-run context extraction failed (non-blocking)")
+
     results: list[StageResult] = []
     started = False
     total_stages = len(STAGE_SEQUENCE)
@@ -242,6 +285,12 @@ def execute_pipeline(
             print(f"{prefix} {stage.name} — FAILED ({elapsed:.1f}s) — {err}")
         elif result.status == StageStatus.BLOCKED_APPROVAL:
             print(f"{prefix} {stage.name} — blocked (awaiting approval)")
+            if stop_on_gate:
+                next_stage = int(stage) + 1
+                print(
+                    f"\n  HITL gate triggered. Review artifacts in: {run_dir}/stage-{int(stage):02d}/\n"
+                    f"  To resume: researchclaw run --config <config> --resume --output {run_dir}\n"
+                )
         results.append(result)
 
         if kb_root is not None and result.status == StageStatus.DONE:
@@ -380,6 +429,50 @@ def execute_pipeline(
         _metaclaw_post_pipeline(config, results, lessons, run_id, run_dir)
     except Exception:  # noqa: BLE001
         logger.warning("MetaClaw post-pipeline hook failed (non-blocking)")
+
+    # --- Cross-run: update registry and index literature ---
+    try:
+        stages_done = sum(1 for r in results if r.status == StageStatus.DONE)
+        stages_failed = sum(1 for r in results if r.status == StageStatus.FAILED)
+        final_stage = int(results[-1].stage) if results else 0
+        _run_registry.update_run(
+            run_id,
+            status="completed" if stages_failed == 0 else "failed",
+            stages_done=stages_done,
+            stages_failed=stages_failed,
+            final_stage=final_stage,
+            quality_score=summary.get("content_metrics", {}).get(
+                "citation_verify_score"
+            ) if isinstance(summary.get("content_metrics"), dict) else None,
+        )
+        # Index shortlisted papers for cross-run dedup
+        sl_path = run_dir / "stage-05" / "shortlist.jsonl"
+        if sl_path.is_file():
+            papers_to_index: list[dict] = []
+            for line in sl_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    try:
+                        papers_to_index.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+            if papers_to_index:
+                index_shortlisted_papers(run_id, papers_to_index)
+        # Check quality regression
+        _cm = summary.get("content_metrics")
+        if isinstance(_cm, dict) and _cm.get("citation_verify_score") is not None:
+            is_regress, msg = check_quality_regression(
+                float(_cm["citation_verify_score"]),
+                config.research.topic,
+                run_id,
+                registry=_run_registry,
+            )
+            if is_regress:
+                print(f"[{run_id}] WARNING: {msg}")
+            else:
+                logger.info("Quality check: %s", msg)
+    except Exception:  # noqa: BLE001
+        logger.debug("Cross-run finalization failed (non-blocking)")
 
     # --- Package deliverables into a single folder ---
     try:
