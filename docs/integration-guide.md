@@ -709,6 +709,23 @@ You: Research the impact of attention mechanisms on speech recognition
 Claude: [Reads project context, runs the pipeline, returns results]
 ```
 
+### Copilot CLI (GitHub)
+
+GitHub Copilot can be used as an ACP agent via the `gh` CLI command (GitHub CLI with Copilot extension). Set the ACP agent to `gh` in your config:
+
+```yaml
+llm:
+  provider: "acp"
+  acp:
+    agent: "gh"
+    cwd: "."
+```
+
+Prerequisites:
+1. Install [GitHub CLI](https://cli.github.com/) (`gh`)
+2. Install the Copilot extension: `gh extension install github/gh-copilot`
+3. Authenticate: `gh auth login`
+
 ### OpenCode
 
 OpenCode loads skills from `.claude/skills/`. The `researchclaw` skill activates on research-related queries and guides the agent through the pipeline.

@@ -206,6 +206,7 @@ AutoResearchClaw can use **any ACP-compatible coding agent** as its LLM backend 
 |-------|---------|-------|
 | Claude Code | `claude` | Anthropic |
 | Codex CLI | `codex` | OpenAI |
+| Copilot CLI | `gh` | GitHub |
 | Gemini CLI | `gemini` | Google |
 | OpenCode | `opencode` | SST |
 | Kimi CLI | `kimi` | Moonshot |
@@ -232,6 +233,7 @@ researchclaw run --config config.yaml --topic "Your research idea" --auto-approv
 | **Standalone CLI** | `researchclaw setup` → `researchclaw init` → `researchclaw run --topic "..." --auto-approve` |
 | **Python API** | `from researchclaw.pipeline import Runner; Runner(config).run()` |
 | **Claude Code** | Reads `RESEARCHCLAW_CLAUDE.md` — just say *"Run research on [topic]"* |
+| **Copilot CLI** | `researchclaw run --topic "..."` with `llm.acp.agent: "gh"` |
 | **OpenCode** | Reads `.claude/skills/` — same natural language interface |
 | **Any AI CLI** | Provide `RESEARCHCLAW_AGENTS.md` as context → agent auto-bootstraps |
 
