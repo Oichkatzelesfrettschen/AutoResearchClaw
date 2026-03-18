@@ -211,7 +211,16 @@ def extract_prior_context(
                     except json.JSONDecodeError:
                         continue
 
-        # Lessons from evolution store
+        # Lessons from evolution store -- filter out infrastructure noise
+        # and keep only research-relevant lessons (methodology, analysis,
+        # experiment design, writing quality).
+        _infra_noise = (
+            "ACP prompt failed", "strip_thinking", "agent needs reconnect",
+            "Missing input:", "blocked awaiting approval", "session not found",
+            "Query closed", "KeyError", "TypeError", "HTTP",
+            "code_generation failed", "n_galaxies", ".format(",
+            "[thinking]", "[acpx]", "exit 1",
+        )
         lessons_path = run_dir / "evolution" / "lessons.jsonl"
         if lessons_path.is_file():
             for line in lessons_path.read_text(encoding="utf-8").splitlines():
@@ -220,10 +229,41 @@ def extract_prior_context(
                     try:
                         lesson = json.loads(line)
                         desc = lesson.get("description", "")
-                        if desc and desc not in ctx.prior_lessons:
+                        category = lesson.get("category", "")
+                        # Skip infrastructure errors -- they teach nothing
+                        # about the research itself
+                        if any(noise in desc for noise in _infra_noise):
+                            continue
+                        # Only keep research-relevant lessons
+                        # (methodology, findings, experiment design)
+                        if not desc or desc in ctx.prior_lessons:
+                            continue
+                        # Skip REFINE decision rationales (just process noise)
+                        if "Research decision was REFINE" in desc:
+                            continue
+                        # Keep only if category suggests research content
+                        if category in ("experiment", "analysis", "writing", ""):
                             ctx.prior_lessons.append(desc)
                     except json.JSONDecodeError:
                         continue
+
+        # Also extract research findings from the analysis (Stage 14)
+        analysis_path = run_dir / "stage-14" / "analysis.md"
+        if analysis_path.is_file():
+            analysis_text = analysis_path.read_text(encoding="utf-8")
+            # Extract consensus findings and contested points
+            for marker in ("## Consensus Findings", "## Contested Points"):
+                if marker in analysis_text:
+                    section = analysis_text.split(marker, 1)[1]
+                    # Take until the next ## heading
+                    next_heading = section.find("\n## ")
+                    if next_heading > 0:
+                        section = section[:next_heading]
+                    section = section.strip()[:2000]
+                    if section and section not in ctx.prior_lessons:
+                        ctx.prior_lessons.append(
+                            f"Prior analysis ({marker.strip('# ')}): {section[:500]}"
+                        )
 
         # Prior peer review critiques from Stage 18
         reviews_path = run_dir / "stage-18" / "reviews.md"
@@ -274,9 +314,9 @@ def format_prior_context_for_prompt(ctx: PriorRunContext) -> str:
         )
 
     if ctx.prior_lessons:
-        parts.append("**Lessons from prior runs** (avoid these mistakes):")
+        parts.append("**Research lessons from prior runs** (apply these insights):")
         for lesson in ctx.prior_lessons[:10]:
-            parts.append(f"- {lesson[:200]}")
+            parts.append(f"- {lesson[:300]}")
         parts.append("")
 
     if ctx.prior_hypotheses:
