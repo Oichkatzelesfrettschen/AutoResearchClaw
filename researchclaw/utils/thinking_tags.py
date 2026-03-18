@@ -44,6 +44,8 @@ _THINK_STRAY_CLOSE_RE = re.compile(
 
 # ---------------------------------------------------------------------------
 # Pattern 2: [thinking] blocks (Claude Code / ACP)
+# These start with [thinking] and run until a blank line followed by
+# non-thinking content, or until the next section marker.
 # ---------------------------------------------------------------------------
 
 _BRACKET_THINKING_RE = re.compile(
@@ -53,6 +55,8 @@ _BRACKET_THINKING_RE = re.compile(
 
 # ---------------------------------------------------------------------------
 # Pattern 3: Insight blocks (Claude Code explanatory style)
+# Format: `* Insight -...`\n...\n`-...-`
+# Also handles Unicode box-drawing variants.
 # ---------------------------------------------------------------------------
 
 _INSIGHT_BLOCK_RE = re.compile(
@@ -75,6 +79,9 @@ _PLAN_BLOCK_RE = re.compile(
 
 # ---------------------------------------------------------------------------
 # Pattern 5: ACP/acpx metadata lines
+# [client], [acpx], [tool], [done] -- should be stripped by ACPClient
+# but may leak through in some code paths. The (?!\() guard avoids
+# matching legitimate references like [client(...)].
 # ---------------------------------------------------------------------------
 
 _ACPX_LINE_RE = re.compile(
@@ -82,12 +89,27 @@ _ACPX_LINE_RE = re.compile(
     re.MULTILINE | re.IGNORECASE,
 )
 
+# ---------------------------------------------------------------------------
+# Pattern 6: Claude "Now let me..." / "Let me..." process narration
+# These are conversational artifacts that leak into paper drafts.
+# Only strip when they appear at the start of a line and are clearly
+# meta-commentary (not part of the paper content).
+# ---------------------------------------------------------------------------
+
+_NARRATION_RE = re.compile(
+    r"^(?:Now let me|Let me now|I'll now|Let me also|Good[,.]|Here'?s|"
+    r"Now I need to|The (?:plan|analysis|next step)|"
+    r"This is (?:a research|the third continuation)).*$",
+    re.MULTILINE,
+)
+
+
 
 def strip_thinking_tags(text: str) -> str:
     """Remove all reasoning artifacts from LLM output.
 
     Handles XML <think> tags, bracket [thinking] blocks, insight
-    decorators, plan markers, and acpx metadata.
+    decorators, plan markers, acpx metadata, and process narration.
 
     Returns cleaned text suitable for paper drafts, code, or YAML/JSON.
     """
@@ -105,6 +127,7 @@ def strip_thinking_tags(text: str) -> str:
     # Phase 2: [thinking] blocks (ACP/Claude Code)
     if "[thinking]" in result.lower():
         result = _BRACKET_THINKING_RE.sub("", result)
+        # Also strip any remaining [thinking] line fragments
         result = re.sub(
             r"^\[thinking\].*$", "", result,
             flags=re.MULTILINE | re.IGNORECASE,
@@ -121,7 +144,10 @@ def strip_thinking_tags(text: str) -> str:
     # Phase 5: acpx metadata lines
     result = _ACPX_LINE_RE.sub("", result)
 
-    # Phase 6: Clean up artifacts
+    # Phase 6: Process narration (conversational meta-commentary)
+    result = _NARRATION_RE.sub("", result)
+
+    # Phase 7: Clean up horizontal-rule artifacts left by insight blocks
     result = re.sub(r"^`[\u2500-]+`\s*$", "", result, flags=re.MULTILINE)
     result = re.sub(r"^`[-]{20,}`\s*$", "", result, flags=re.MULTILINE)
 
