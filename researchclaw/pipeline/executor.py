@@ -926,6 +926,16 @@ def _build_context_preamble(
         f"**Topic**: {config.research.topic}",
         f"**Domains**: {', '.join(config.research.domains) if config.research.domains else 'general'}",
     ]
+    # Inject cross-run prior context if the runner wrote it to the run root.
+    # This file is only present when there are prior runs on the same topic.
+    _prior_ctx_file = run_dir / "prior_context.md"
+    if _prior_ctx_file.is_file():
+        try:
+            _prior_ctx_text = _prior_ctx_file.read_text(encoding="utf-8")
+            if _prior_ctx_text.strip():
+                parts.append(f"\n{_prior_ctx_text[:6000]}")
+        except OSError:
+            pass
     if include_goal:
         goal = _read_prior_artifact(run_dir, "goal.md")
         if goal:
