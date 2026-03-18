@@ -934,8 +934,8 @@ def _read_kb_files(
             text = fpath.read_text(encoding="utf-8").strip()
             if text:
                 results.append((fname, text[:max_chars_each]))
-        except OSError:
-            pass
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.debug("Skipping KB file %s: %s", fpath, exc)
     return results
 
 
@@ -8402,11 +8402,12 @@ def _execute_export_publish(
                 )
                 final_paper = revised
         except Exception:  # noqa: BLE001
-            # ACP session disconnect or other transient LLM failure — the paper
+            # ACP session disconnect or other transient LLM failure -- the paper
             # itself is complete; just use the revised draft directly rather than
             # failing the entire stage and losing all prior work.
             logger.warning(
-                "Stage 22: LLM call failed — falling back to paper_revised.md"
+                "Stage 22: LLM call failed -- falling back to paper_revised.md",
+                exc_info=True,
             )
             final_paper = revised
     else:
