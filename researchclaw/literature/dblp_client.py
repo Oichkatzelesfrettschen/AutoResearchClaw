@@ -108,10 +108,8 @@ def search_dblp(
             if len(papers) >= limit:
                 break
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "Failed to parse DBLP hit: %s",
-                hit.get("info", {}).get("key", "?"),
-            )
+            hit_id = hit.get("info", {}).get("key", "?") if isinstance(hit, dict) else repr(hit)
+            logger.debug("Failed to parse DBLP hit: %s", hit_id)
     return papers
 
 

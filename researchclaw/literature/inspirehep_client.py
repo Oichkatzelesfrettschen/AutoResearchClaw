@@ -97,10 +97,8 @@ def search_inspirehep(
         try:
             papers.append(_parse_inspire_hit(hit))
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "Failed to parse INSPIRE hit: %s",
-                hit.get("metadata", {}).get("control_number", "?"),
-            )
+            hit_id = hit.get("metadata", {}).get("control_number", "?") if isinstance(hit, dict) else repr(hit)
+            logger.debug("Failed to parse INSPIRE hit: %s", hit_id)
     return papers
 
 

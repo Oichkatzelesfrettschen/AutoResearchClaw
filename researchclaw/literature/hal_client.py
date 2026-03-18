@@ -109,9 +109,8 @@ def search_hal(
         try:
             papers.append(_parse_hal_doc(doc))
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "Failed to parse HAL doc: %s", doc.get("halId_s", "?")
-            )
+            doc_id = doc.get("halId_s", "?") if isinstance(doc, dict) else repr(doc)
+            logger.debug("Failed to parse HAL doc: %s", doc_id)
     return papers
 
 

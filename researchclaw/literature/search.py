@@ -189,8 +189,14 @@ def search_papers(
 
     for src in sources:
         src_lower = src.lower().replace("-", "_").replace(" ", "_")
-        # Adapt query for this source's syntax
-        adapted_query = adapt_query(query, src_lower, year_min)
+        # Adapt query syntax only -- do NOT pass year_min here.
+        # Each client applies year filtering natively via its own API
+        # parameters; passing year_min into adapt_query would cause double
+        # year-filtering (once in the query string, once in API params).
+        adapted_query = adapt_query(query, src_lower, 0)
+        # Qualify the cache key by year_min so queries for the same text
+        # but different year ranges don't collide in the cache.
+        cache_query = f"{query}@{year_min}" if year_min else query
         cache_source = (
             "semantic_scholar" if src_lower in ("semantic_scholar", "s2") else src_lower
         )
@@ -202,7 +208,7 @@ def search_papers(
                     year_min=year_min,
                 )
                 all_papers.extend(papers)
-                cache_put(query, "openalex", limit, _papers_to_dicts(papers))
+                cache_put(cache_query, "openalex", limit, _papers_to_dicts(papers))
                 source_stats["openalex"] = len(papers)
                 logger.info(
                     "OpenAlex returned %d papers for %r", len(papers), adapted_query
@@ -217,7 +223,7 @@ def search_papers(
                     api_key=s2_api_key,
                 )
                 all_papers.extend(papers)
-                cache_put(query, "semantic_scholar", limit, _papers_to_dicts(papers))
+                cache_put(cache_query, "semantic_scholar", limit, _papers_to_dicts(papers))
                 source_stats["semantic_scholar"] = len(papers)
                 logger.info(
                     "Semantic Scholar returned %d papers for %r", len(papers), adapted_query
@@ -228,7 +234,7 @@ def search_papers(
             elif src_lower == "arxiv":
                 papers = search_arxiv(adapted_query, limit=limit, year_min=year_min)
                 all_papers.extend(papers)
-                cache_put(query, "arxiv", limit, _papers_to_dicts(papers))
+                cache_put(cache_query, "arxiv", limit, _papers_to_dicts(papers))
                 source_stats["arxiv"] = len(papers)
                 logger.info("arXiv returned %d papers for %r", len(papers), adapted_query)
 
@@ -239,13 +245,9 @@ def search_papers(
                 kwargs: dict[str, object] = {"limit": limit}
                 if year_min:
                     kwargs["year_min"] = year_min
-                # Pass API keys for sources that need them
-                if src_lower == "core" and s2_api_key:
-                    # Reuse s2_api_key config slot; users can set core_api_key later
-                    pass
                 papers = search_fn(adapted_query, **kwargs)
                 all_papers.extend(papers)
-                cache_put(query, src_lower, limit, _papers_to_dicts(papers))
+                cache_put(cache_query, src_lower, limit, _papers_to_dicts(papers))
                 source_stats[src_lower] = len(papers)
                 logger.info(
                     "%s returned %d papers for %r", src_lower, len(papers), adapted_query
@@ -259,13 +261,16 @@ def search_papers(
             RuntimeError,
             TypeError,
             ValueError,
+            ImportError,
+            ModuleNotFoundError,
+            AttributeError,
             urllib.error.HTTPError,
             urllib.error.URLError,
         ):
             logger.warning(
                 "[rate-limit] Source %s failed for %r — trying cache", src, query
             )
-            cached = cache_get(query, cache_source, limit)
+            cached = cache_get(cache_query, cache_source, limit)
             if cached:
                 papers = _dicts_to_papers(cached)
                 all_papers.extend(papers)

@@ -92,9 +92,8 @@ def search_datacite(
         try:
             papers.append(_parse_datacite_item(item))
         except Exception:  # noqa: BLE001
-            logger.debug(
-                "Failed to parse DataCite item: %s", item.get("id", "?")
-            )
+            item_id = item.get("id", "?") if isinstance(item, dict) else repr(item)
+            logger.debug("Failed to parse DataCite item: %s", item_id)
     return papers
 
 

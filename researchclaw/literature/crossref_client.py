@@ -97,7 +97,8 @@ def search_crossref(
         try:
             papers.append(_parse_crossref_item(item))
         except Exception:  # noqa: BLE001
-            logger.debug("Failed to parse CrossRef item: %s", item.get("DOI", "?"))
+            item_id = item.get("DOI", "?") if isinstance(item, dict) else repr(item)
+            logger.debug("Failed to parse CrossRef item: %s", item_id)
     return papers
 
 
