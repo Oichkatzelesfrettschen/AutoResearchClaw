@@ -26,10 +26,18 @@ shift
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --python)
+            if [[ $# -lt 2 || -z "${2-}" ]]; then
+                echo "Usage: sentinel.sh <run_dir> [--python <path>] [--config <path>]" >&2
+                exit 1
+            fi
             PYTHON_PATH="$2"
             shift 2
             ;;
         --config)
+            if [[ $# -lt 2 || -z "${2-}" ]]; then
+                echo "Usage: sentinel.sh <run_dir> [--python <path>] [--config <path>]" >&2
+                exit 1
+            fi
             CONFIG_PATH="$2"
             shift 2
             ;;

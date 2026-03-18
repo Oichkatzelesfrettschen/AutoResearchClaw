@@ -116,13 +116,21 @@ def cmd_run(args: argparse.Namespace) -> int:
             _saved = _run_id_file.read_text(encoding="utf-8").strip()
             if _saved:
                 run_id = _saved
-        except OSError:
-            pass
+        except OSError as exc:
+            print(
+                f"Warning: could not read existing run.id at {_run_id_file}: {exc}. "
+                "Using a new run_id instead.",
+                file=sys.stderr,
+            )
     else:
         try:
             _run_id_file.write_text(run_id, encoding="utf-8")
-        except OSError:
-            pass
+        except OSError as exc:
+            print(
+                f"Warning: could not persist run.id to {_run_id_file}: {exc}. "
+                "Run restarts may use a different run_id.",
+                file=sys.stderr,
+            )
 
     if config.knowledge_base.root:
         kb_root_path = Path(config.knowledge_base.root)
