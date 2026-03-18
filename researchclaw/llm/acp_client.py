@@ -229,6 +229,7 @@ class ACPClient:
         "agent needs reconnect",
         "session not found",
         "Query closed",
+        "timed out",
     )
     _MAX_RECONNECT_ATTEMPTS = 2
 
@@ -241,6 +242,8 @@ class ACPClient:
 
         If the session has died (common after long-running stages), retries
         up to ``_MAX_RECONNECT_ATTEMPTS`` times with automatic reconnection.
+        Handles both RuntimeError from acpx exit codes and
+        subprocess.TimeoutExpired from stale session hangs.
         """
         acpx = self._resolve_acpx()
         if not acpx:
@@ -254,27 +257,28 @@ class ACPClient:
                 prompt_bytes,
             )
 
-        last_exc: RuntimeError | None = None
+        last_exc: Exception | None = None
         for attempt in range(1 + self._MAX_RECONNECT_ATTEMPTS):
-            self._ensure_session()
             try:
+                self._ensure_session()
                 if use_file:
                     return self._send_prompt_via_file(acpx, prompt)
                 return self._send_prompt_cli(acpx, prompt)
-            except RuntimeError as exc:
-                if not any(pat in str(exc) for pat in self._RECONNECT_ERRORS):
+            except (RuntimeError, subprocess.TimeoutExpired) as exc:
+                exc_str = str(exc)
+                if not any(pat in exc_str for pat in self._RECONNECT_ERRORS):
                     raise
                 last_exc = exc
                 if attempt < self._MAX_RECONNECT_ATTEMPTS:
                     logger.warning(
-                        "ACP session died (%s), reconnecting (attempt %d/%d)...",
+                        "ACP session error (%s), reconnecting (attempt %d/%d)...",
                         exc,
                         attempt + 1,
                         self._MAX_RECONNECT_ATTEMPTS,
                     )
                     self._force_reconnect()
 
-        raise last_exc  # type: ignore[misc]
+        raise RuntimeError(f"ACP exhausted {self._MAX_RECONNECT_ATTEMPTS} reconnect attempts: {last_exc}")
 
     def _force_reconnect(self) -> None:
         """Close the stale session and reset so _ensure_session creates a fresh one.
