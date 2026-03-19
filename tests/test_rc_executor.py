@@ -1712,7 +1712,11 @@ class TestWritePaperSections:
                     if m.get("role") == "user":
                         self.user_prompts.append(m["content"])
                 from researchclaw.llm.client import LLMResponse
-                return LLMResponse(content="## Section\nContent here.", model="fake")
+                # Include required sections to avoid triggering truncation recovery
+                return LLMResponse(
+                    content="## Section\nContent here.\n## Limitations\nLimits.\n## Conclusion\nDone.",
+                    model="fake",
+                )
 
         llm = ContextTrackingLLM()
         from researchclaw.prompts import PromptManager
