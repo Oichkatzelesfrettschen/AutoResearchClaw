@@ -188,9 +188,30 @@ def fix_common_latex_errors(
                     )
                     fixes.append(f"Removed missing package {pkg}")
 
-        # Too many unprocessed floats
-        if "too many unprocessed floats" in err_lower:
-            # Add \clearpage before problematic float
+        # Too many unprocessed floats / Float(s) lost
+        if "too many unprocessed floats" in err_lower or "float(s) lost" in err_lower:
+            # BUG-109 fix: Add \extrafloats and \clearpage for float overflow
+            if "\\extrafloats" not in fixed:
+                fixed = fixed.replace(
+                    "\\begin{document}",
+                    "\\begin{document}\n\\extrafloats{200}",
+                )
+                fixes.append("Added \\extrafloats{200} for float overflow")
+            # BUG-109b: \textwidth in 2-column causes oversized floats to be lost
+            if "\\resizebox{\\textwidth}" in fixed:
+                fixed = fixed.replace(
+                    "\\resizebox{\\textwidth}",
+                    "\\resizebox{\\columnwidth}",
+                )
+                fixes.append("Replaced \\textwidth with \\columnwidth in resizebox")
+            # Relax float placement from [ht] or [t] to [htbp!]
+            fixed = re.sub(
+                r"\\begin\{(table|figure)\}\[h?t\]",
+                r"\\begin{\1}[htbp!]",
+                fixed,
+            )
+            fixes.append("Relaxed float placement to [htbp!]")
+            # Add \clearpage before first table as last resort
             fixed = fixed.replace(
                 "\\begin{table}",
                 "\\clearpage\n\\begin{table}",

@@ -736,7 +736,10 @@ def test_write_checkpoint_preserves_old_on_write_failure(
     original_open = builtins.open
 
     def _exploding_open(path, *args, **kwargs):
-        # mkstemp returns an fd (int), then we open(fd, ...) — intercept that
+        # After os.close(fd), _write_checkpoint opens via path string —
+        # intercept temp-file opens (checkpoint_*.tmp)
+        if isinstance(path, (str, Path)) and "checkpoint_" in str(path):
+            raise OSError("disk full")
         if isinstance(path, int):
             raise OSError("disk full")
         return original_open(path, *args, **kwargs)

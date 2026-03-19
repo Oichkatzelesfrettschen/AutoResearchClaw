@@ -181,6 +181,13 @@ def _sanitize_latex_output(
 
     tex = _cite_outside_verbatim(tex)
 
+    # 1c. BUG-110 safety net: Replace any remaining Unicode Greek/math symbols.
+    #     _convert_inline handles most, but titles, captions, and preamble
+    #     fragments can still contain raw Unicode that kills pdflatex.
+    for _uchar, _lcmd in _UNICODE_GREEK_TO_LATEX.items():
+        if _uchar in tex:
+            tex = tex.replace(_uchar, _lcmd)
+
     # 2. Remove HTML entities that survived pre-processing
     tex = tex.replace("&nbsp;", "~")
     tex = tex.replace("&amp;", "\\&")
@@ -1067,7 +1074,10 @@ def _render_table(table_lines: list[str], caption: str = "") -> str:
     lines_out.append("\\begin{table}[ht]")
     lines_out.append("\\centering")
     if needs_resize:
-        lines_out.append("\\resizebox{\\textwidth}{!}{%")
+        # BUG-109b fix: Use \columnwidth (works in both 1-col and 2-col layouts)
+        # \textwidth in 2-column formats (ICML) is full page width, causing
+        # floats wider than a column to be "lost" by LaTeX.
+        lines_out.append("\\resizebox{\\columnwidth}{!}{%")
     lines_out.append(f"\\begin{{tabular}}{{{col_spec}}}")
     lines_out.append("\\toprule")
     lines_out.append(
@@ -1181,6 +1191,31 @@ _UNICODE_TO_ASCII: dict[str, str] = {
     "\u2113": "ell",   "\u2202": "d",     "\u222b": "int",
 }
 
+
+# BUG-110: Unicode Greek → LaTeX math replacements for inline text.
+# Used in _convert_inline() and _sanitize_latex_output().
+_UNICODE_GREEK_TO_LATEX: dict[str, str] = {
+    # Lowercase
+    "\u03b1": "$\\alpha$", "\u03b2": "$\\beta$", "\u03b3": "$\\gamma$",
+    "\u03b4": "$\\delta$", "\u03b5": "$\\epsilon$", "\u03b6": "$\\zeta$",
+    "\u03b7": "$\\eta$", "\u03b8": "$\\theta$", "\u03b9": "$\\iota$",
+    "\u03ba": "$\\kappa$", "\u03bb": "$\\lambda$", "\u03bc": "$\\mu$",
+    "\u03bd": "$\\nu$", "\u03be": "$\\xi$", "\u03c0": "$\\pi$",
+    "\u03c1": "$\\rho$", "\u03c3": "$\\sigma$", "\u03c4": "$\\tau$",
+    "\u03c5": "$\\upsilon$", "\u03c6": "$\\phi$", "\u03c7": "$\\chi$",
+    "\u03c8": "$\\psi$", "\u03c9": "$\\omega$",
+    # Uppercase
+    "\u0393": "$\\Gamma$", "\u0394": "$\\Delta$", "\u0398": "$\\Theta$",
+    "\u039b": "$\\Lambda$", "\u039e": "$\\Xi$", "\u03a0": "$\\Pi$",
+    "\u03a3": "$\\Sigma$", "\u03a6": "$\\Phi$", "\u03a8": "$\\Psi$",
+    "\u03a9": "$\\Omega$",
+    # Common math symbols not already handled
+    "\u2200": "$\\forall$", "\u2203": "$\\exists$",
+    "\u2207": "$\\nabla$", "\u2202": "$\\partial$",
+    "\u2026": "\\ldots{}", "\u22c5": "$\\cdot$",
+    "\u2113": "$\\ell$", "\u222b": "$\\int$",
+    "\u2209": "$\\notin$",
+}
 
 _ALGO_KEYWORDS = re.compile(
     r"\b(Input|Output|Return|While|For|If|Else|Repeat|Until|Function|Procedure|Algorithm)\b",
@@ -1310,6 +1345,16 @@ def _convert_inline(text: str) -> str:
     text = text.replace("\u2192", "$\\rightarrow$")  # →
     text = text.replace("\u2190", "$\\leftarrow$")   # ←
     text = text.replace("\u00d7", "$\\times$")     # ×
+    text = text.replace("\u2260", "$\\neq$")       # ≠
+    text = text.replace("\u2208", "$\\in$")         # ∈
+    text = text.replace("\u221e", "$\\infty$")      # ∞
+
+    # BUG-110: Replace Unicode Greek letters with LaTeX math equivalents.
+    # These appear when LLMs emit raw Unicode (e.g. "ε-greedy" instead of
+    # "$\epsilon$-greedy") and cause fatal pdflatex errors.
+    for _uchar, _lcmd in _UNICODE_GREEK_TO_LATEX.items():
+        if _uchar in text:
+            text = text.replace(_uchar, _lcmd)
 
     # Protect math and cite from escaping
     protected: list[str] = []

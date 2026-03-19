@@ -5062,7 +5062,11 @@ def _execute_iterative_refine(
                         repaired_files = dict(candidate_files)
                         repaired_files["main.py"] = single
                 if repaired_files:
-                    candidate_files = repaired_files
+                    # BUG-106 fix: merge instead of replace to preserve
+                    # supporting modules (trainers.py, utils.py, etc.)
+                    merged = dict(candidate_files)
+                    merged.update(repaired_files)
+                    candidate_files = merged
                     _write_project(version_dir, candidate_files)
                     # Re-run after runtime fix
                     sandbox2 = create_sandbox(

@@ -83,11 +83,11 @@ class ConferenceTemplate:
             f"\n"
             f"\\begin{{document}}\n"
             f"{post_doc_author}"
-            f"\\maketitle\n"
-            f"\n"
             f"\\begin{{abstract}}\n"
             f"{abstract}\n"
             f"\\end{{abstract}}\n"
+            f"\n"
+            f"\\maketitle\n"
         )
 
     def render_footer(self, bib_file: str = "references") -> str:
@@ -289,6 +289,7 @@ ICML_2026 = ConferenceTemplate(
         "algorithm",
         "algorithmic",
         "adjustbox",
+        "morefloats",
     ),
     author_format="icml",
     bib_style="icml2026",

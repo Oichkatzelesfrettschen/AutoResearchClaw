@@ -395,23 +395,29 @@ class DockerSandbox:
             user_datasets.mkdir(parents=True, exist_ok=True)
             cmd.extend(["-v", f"{user_datasets}:/workspace/data:rw"])
 
-        # Mount HuggingFace model cache (read-only — experiments only read
-        # pretrained models; downloads happen via setup.py with network access
-        # and write to /workspace/data/hf instead).
+        # Mount HuggingFace model cache (read-only for model weights).
+        # BUG-103 fix: Don't set HF_HOME to the read-only mount — the
+        # transformers library writes token/telemetry files under HF_HOME.
+        # Instead, use HF_HUB_CACHE for read-only model access and let
+        # HF_HOME default to a writable location inside the container.
         hf_mounted = False
-        _hf_container = "/home/researcher/.cache/huggingface"
+        _hf_hub_cache = "/home/researcher/.cache/huggingface/hub"
         hf_home_env = os.environ.get("HF_HOME", "").strip()
         if hf_home_env:
             xdg_hf = Path(hf_home_env).resolve()
             if xdg_hf.is_dir():
-                cmd.extend(["-v", f"{xdg_hf}:{_hf_container}:ro"])
-                cmd.extend(["-e", f"HF_HOME={_hf_container}"])
+                cmd.extend(["-v", f"{xdg_hf}:{_hf_hub_cache}:ro"])
+                cmd.extend(["-e", f"HF_HUB_CACHE={_hf_hub_cache}"])
                 hf_mounted = True
         if not hf_mounted:
             hf_cache_host = Path.home() / ".cache" / "huggingface"
             if hf_cache_host.is_dir():
-                cmd.extend(["-v", f"{hf_cache_host}:{_hf_container}:ro"])
-                cmd.extend(["-e", f"HF_HOME={_hf_container}"])
+                cmd.extend(["-v", f"{hf_cache_host}:{_hf_hub_cache}:ro"])
+                cmd.extend(["-e", f"HF_HUB_CACHE={_hf_hub_cache}"])
+
+        # BUG-107 fix: Set TORCH_HOME to writable location so torchvision
+        # can download pretrained model weights (e.g., Inception-v3 for FID).
+        cmd.extend(["-e", "TORCH_HOME=/workspace/.cache/torch"])
 
         # Pass HF token if available (for gated model downloads)
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
