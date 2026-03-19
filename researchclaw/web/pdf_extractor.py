@@ -20,6 +20,8 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from researchclaw.web._ssrf import check_url_ssrf
+
 try:
     import fitz  # PyMuPDF
     HAS_FITZ = True
@@ -130,15 +132,9 @@ class PDFExtractor:
 
     def extract_from_url(self, url: str) -> PDFContent:
         """Download a PDF from URL and extract text."""
-        # Validate URL scheme to prevent SSRF (file://, internal IPs, etc.)
-        from urllib.parse import urlparse
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return PDFContent(path=url, error=f"Unsupported URL scheme: {parsed.scheme}")
-        # Block private/internal IPs
-        hostname = parsed.hostname or ""
-        if hostname in ("localhost", "127.0.0.1", "0.0.0.0") or hostname.startswith("169.254."):
-            return PDFContent(path=url, error=f"Blocked internal URL: {hostname}")
+        err = check_url_ssrf(url)
+        if err:
+            return PDFContent(path=url, error=err)
 
         tmp_path = None
         try:

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from researchclaw.web.crawler import CrawlResult, WebCrawler
+from researchclaw.web import check_url_ssrf
 
 
 # ---------------------------------------------------------------------------
@@ -152,3 +153,85 @@ class TestCrawlAsync:
         result = asyncio.run(crawler.crawl("https://example.com"))
         # Should succeed via either crawl4ai or urllib fallback
         assert isinstance(result, CrawlResult)
+
+
+# ---------------------------------------------------------------------------
+# SSRF validation: check_url_ssrf
+# ---------------------------------------------------------------------------
+
+
+class TestCheckUrlSsrf:
+    def test_http_allowed(self):
+        assert check_url_ssrf("http://example.com") is None
+
+    def test_https_allowed(self):
+        assert check_url_ssrf("https://arxiv.org/abs/2301.00001") is None
+
+    def test_rejects_file_scheme(self):
+        err = check_url_ssrf("file:///etc/passwd")
+        assert err is not None
+        assert "scheme" in err.lower()
+
+    def test_rejects_ftp_scheme(self):
+        err = check_url_ssrf("ftp://server/file")
+        assert err is not None
+
+    def test_rejects_localhost(self):
+        err = check_url_ssrf("http://localhost:8080")
+        assert err is not None
+        assert "internal" in err.lower() or "private" in err.lower() or "blocked" in err.lower()
+
+    def test_rejects_127(self):
+        err = check_url_ssrf("http://127.0.0.1:6379")
+        assert err is not None
+
+    def test_rejects_10_range(self):
+        err = check_url_ssrf("http://10.0.0.1")
+        assert err is not None
+
+    def test_rejects_172_range(self):
+        err = check_url_ssrf("http://172.16.0.1")
+        assert err is not None
+
+    def test_rejects_192_range(self):
+        err = check_url_ssrf("http://192.168.1.1")
+        assert err is not None
+
+    def test_rejects_aws_metadata(self):
+        err = check_url_ssrf("http://169.254.169.254/latest/meta-data")
+        assert err is not None
+
+    def test_rejects_empty_hostname(self):
+        err = check_url_ssrf("http://")
+        assert err is not None
+
+
+# ---------------------------------------------------------------------------
+# Crawler SSRF integration
+# ---------------------------------------------------------------------------
+
+
+class TestCrawlerSsrfIntegration:
+    @patch("researchclaw.web.crawler.urlopen")
+    def test_crawl_sync_rejects_private_url(self, mock_urlopen):
+        crawler = WebCrawler()
+        result = crawler.crawl_sync("http://127.0.0.1:8080")
+        assert not result.success
+        assert result.error
+        mock_urlopen.assert_not_called()
+
+    @patch("researchclaw.web.crawler.urlopen")
+    def test_crawl_sync_rejects_file_scheme(self, mock_urlopen):
+        crawler = WebCrawler()
+        result = crawler.crawl_sync("file:///etc/passwd")
+        assert not result.success
+        assert "scheme" in result.error.lower()
+        mock_urlopen.assert_not_called()
+
+    @patch("researchclaw.web.crawler.urlopen")
+    def test_crawl_async_rejects_private_url(self, mock_urlopen):
+        crawler = WebCrawler()
+        result = asyncio.run(crawler.crawl("http://10.0.0.1:9200"))
+        assert not result.success
+        assert result.error
+        mock_urlopen.assert_not_called()

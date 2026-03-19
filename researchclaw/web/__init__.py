@@ -13,8 +13,10 @@ Public API
 - ``WebSearchClient`` — Tavily search wrapper
 - ``GoogleScholarClient`` — scholarly wrapper
 - ``PDFExtractor`` — PDF text extraction
+- ``check_url_ssrf`` — SSRF validation for URLs
 """
 
+from researchclaw.web._ssrf import check_url_ssrf
 from researchclaw.web.crawler import WebCrawler
 from researchclaw.web.search import WebSearchClient
 from researchclaw.web.scholar import GoogleScholarClient
@@ -22,6 +24,7 @@ from researchclaw.web.pdf_extractor import PDFExtractor
 from researchclaw.web.agent import WebSearchAgent
 
 __all__ = [
+    "check_url_ssrf",
     "WebCrawler",
     "WebSearchClient",
     "GoogleScholarClient",
