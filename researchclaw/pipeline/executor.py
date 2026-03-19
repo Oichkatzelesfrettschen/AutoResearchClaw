@@ -18,6 +18,13 @@ from researchclaw.hardware import HardwareProfile, detect_hardware, ensure_torch
 from researchclaw.llm import create_llm_client
 from researchclaw.llm.client import LLMClient
 from researchclaw.prompts import PromptManager
+from researchclaw.literature.domain_queries import (
+    get_domain_queries,
+    get_experiment_fallback,
+    is_null_result_topic,
+    is_control_pair as is_ablation_control_pair,
+)
+from researchclaw.utils.thinking_tags import strip_thinking_tags
 from researchclaw.pipeline.stages import (
     NEXT_STAGE,
     Stage,
@@ -170,56 +177,6 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-# ---------------------------------------------------------------------------
-# Domain expansion registry
-#
-# Maps a domain keyword (as it would appear in config.research.domains or
-# the topic string) to 1-2 high-value search queries for that domain.
-# Keys are lowercase; matching is substring-based (e.g. "manga" matches
-# "MaNGA", "ifu-manga", etc.). Users extend this via config.research.domains.
-# ---------------------------------------------------------------------------
-
-_DOMAIN_QUERY_MAP: dict[str, list[str]] = {
-    # Observational galaxy surveys
-    "manga":          ["MaNGA integral field spectroscopy rotation curve",
-                       "MaNGA IFU galaxy kinematics dark matter"],
-    "ifu":            ["IFU spectroscopy galaxy kinematics",
-                       "integral field unit survey velocity dispersion"],
-    "lotss":          ["LoTSS LOFAR low-frequency radio survey",
-                       "LoTSS DR2 radio continuum galaxy"],
-    # Dark matter and halo models
-    "rotation-curve": ["rotation curve NFW profile dark matter constraint",
-                       "galaxy rotation curve systematic uncertainty"],
-    "nfw":            ["NFW halo profile dark matter rotation curve",
-                       "Navarro-Frenk-White profile fitting"],
-    "dark-matter":    ["dark matter detection null result upper limit",
-                       "dark matter halo galaxy kinematics constraint"],
-    "null-result":    ["null result dark matter detection galaxy survey",
-                       "non-detection upper limit dark matter signal"],
-    # Algebraic / mathematical physics
-    "cayley-dickson": ["Cayley-Dickson algebra hypercomplex numbers physics",
-                       "octonion sedenion particle physics application"],
-    "octonion":       ["octonion algebra exceptional Lie group physics",
-                       "G2 octonion gauge theory"],
-    "sedenion":       ["sedenion algebra zero divisor physics",
-                       "16-dimensional hypercomplex number physics"],
-    # Formal methods
-    "formal-verification": ["formal verification proof assistant scientific computing",
-                             "Coq Rocq theorem prover physics mathematics"],
-    "rocq":           ["Rocq Coq proof assistant formal verification",
-                       "interactive theorem proving mathematics"],
-    # Cosmology
-    "cosmology":      ["dark energy equation of state observational constraint",
-                       "Pantheon supernova cosmological parameter"],
-    # Fluid simulation / LBM
-    "lbm":            ["lattice Boltzmann method fluid simulation turbulence",
-                       "LBM GPU acceleration computational fluid dynamics"],
-    # Machine learning (generic)
-    "neural":         ["neural network deep learning benchmark reproducibility",
-                       "machine learning scientific discovery"],
-}
-
-
 def _build_fallback_queries(
     topic: str,
     domains: tuple[str, ...] = (),
@@ -230,16 +187,9 @@ def _build_fallback_queries(
     and returns garbage from search engines), extract noun phrases and
     domain keywords. Returns 5-10 targeted queries.
 
-    Parameters
-    ----------
-    topic:
-        The raw research topic string (often verbose).
-    domains:
-        Domain keywords from ``config.research.domains``. Each keyword is
-        looked up in ``_DOMAIN_QUERY_MAP`` for pre-built high-value queries.
-        Domains also trigger substring matching against the topic itself, so
-        a domain of ``"manga"`` matches a topic containing "MaNGA" even if
-        the config entry spelling differs.
+    Domain-specific pre-built queries come from
+    ``researchclaw.literature.domain_queries.get_domain_queries``; all
+    domain knowledge lives there, not here.
     """
     # Split on common delimiters and extract meaningful chunks
     chunks = re.split(r"[,:;()\[\]]+", topic)
@@ -266,25 +216,8 @@ def _build_fallback_queries(
     words = topic.lower().split()
     key_terms = [w for w in words if len(w) > 3 and w not in _stop]
 
-    queries: list[str] = []
-    topic_lower = topic.lower()
-
-    # Strategy 1: Domain expansions FIRST (highest value).
-    # Check each configured domain against _DOMAIN_QUERY_MAP, and also
-    # check whether the domain keyword appears in the topic string itself.
-    active_domains: set[str] = set()
-    for d in domains:
-        active_domains.add(d.lower())
-    # Auto-detect domains from the topic so topic-only users also benefit
-    for d in _DOMAIN_QUERY_MAP:
-        core_kw = d.split("-")[0]  # "cayley-dickson" -> "cayley"
-        if core_kw in topic_lower:
-            active_domains.add(d)
-
-    for d in active_domains:
-        for q in _DOMAIN_QUERY_MAP.get(d, []):
-            if q not in queries:
-                queries.append(q)
+    # Strategy 1: Domain expansions FIRST (highest value) — delegated to add-on.
+    queries: list[str] = list(get_domain_queries(topic, domains))
 
     # Strategy 2: Use meaningful chunks from the topic (up to 60 chars each)
     for chunk in chunks[:4]:
@@ -451,17 +384,9 @@ def _extract_yaml_block(text: str) -> str:
     Strips [thinking] blocks, insight blocks, and other ACP artifacts
     before looking for YAML in markdown fences or raw text.
     """
-    # Strip ACP noise: [thinking]..., insight/plan blocks
-    cleaned = re.sub(
-        r"\[thinking\].*?(?=\n```|\n[A-Z]|\Z)",
-        "", text, flags=re.DOTALL,
-    )
-    # Strip Claude Code insight blocks (backtick-delimited headers)
-    cleaned = re.sub(
-        r"`[*] Insight[^`]*`\n.*?`[-]+`",
-        "", cleaned, flags=re.DOTALL,
-    )
-    cleaned = re.sub(r"\[plan\].*?\n\n", "", cleaned, flags=re.DOTALL)
+    # Strip ACP noise: thinking blocks, insight blocks, plan markers, narration.
+    # All patterns are handled centrally in strip_thinking_tags.
+    cleaned = strip_thinking_tags(text)
 
     # Try markdown fences first (most reliable) — on cleaned text
     if "```yaml" in cleaned:
@@ -2996,47 +2921,22 @@ def _execute_experiment_design(
                 }
 
     if plan is None:
-        # Build domain-aware fallback from topic content
-        _topic_lower = config.research.topic.lower()
         logger.warning(
             "Stage 09: LLM failed to produce valid experiment plan YAML. "
             "Using domain-aware fallback."
         )
-        # Extract domain signals from topic
-        _datasets = ["primary_dataset"]
-        _baselines = ["standard_baseline"]
-        _methods = ["proposed_method"]
-        _ablations = ["without_key_component"]
-        _metrics = [config.experiment.metric_key]
-
-        if "manga" in _topic_lower or "rotation curve" in _topic_lower:
-            _datasets = ["MaNGA_DR17_rotcurves", "manga_stack_D16"]
-            _baselines = ["NFW_profile_only", "baryonic_model"]
-            _methods = ["harmonic_halo_stacking", "multi_algebra_DFT"]
-            _ablations = ["without_inclination_correction", "single_CD_dimension"]
-            _metrics = ["SNR", "RMS_residual", "detection_threshold"]
-        elif "cayley" in _topic_lower or "sedenion" in _topic_lower:
-            _datasets = ["CD_dimension_sweep", "partner_graph_spectrum"]
-            _baselines = ["quaternion_baseline", "octonion_baseline"]
-            _methods = ["sedenion_analysis", "dim_tower_sweep"]
-            _ablations = ["single_dimension", "without_zero_divisors"]
-            _metrics = ["eigenvalue_degeneracy", "flat_band_fraction"]
-        elif "lotss" in _topic_lower or "radio" in _topic_lower:
-            _datasets = ["LoTSS_DR2", "MaNGA_crossmatch"]
-            _baselines = ["flux_threshold_only"]
-            _methods = ["kinematic_bisection", "ultrametric_clustering"]
-            _ablations = ["without_radio_data", "single_frequency"]
-            _metrics = ["detection_fraction", "correlation_coefficient"]
-
+        _fb = get_experiment_fallback(
+            config.research.topic, config.experiment.metric_key
+        )
         plan = {
             "topic": config.research.topic,
             "generated": _utcnow_iso(),
             "objectives": ["Evaluate hypotheses with controlled experiments"],
-            "datasets": _datasets,
-            "baselines": _baselines,
-            "proposed_methods": _methods,
-            "ablations": _ablations,
-            "metrics": _metrics,
+            "datasets":         _fb["datasets"],
+            "baselines":        _fb["baselines"],
+            "proposed_methods": _fb["proposed_methods"],
+            "ablations":        _fb["ablations"],
+            "metrics":          _fb["metrics"],
             "risks": ["systematic biases", "coverage limitations", "model assumptions"],
             "compute_budget": {"max_gpu": 1, "max_hours": 4},
         }
@@ -5531,21 +5431,11 @@ def _execute_result_analysis(
                         _all_equal = False
                         break
                 if _all_equal and _shared_keys:
-                    # Check if identical outputs are EXPECTED: null-result experiment
-                    # (the non-detection IS the finding) or ablation-as-control pair.
-                    _topic_lower = config.research.topic.lower() if config else ""
-                    _is_null_result = any(
-                        kw in _topic_lower
-                        for kw in ("null result", "null detection", "upper limit",
-                                   "non-detection", "negative result", "no signal",
-                                   "falsif", "no evidence")
-                    )
-                    _is_control_pair = any(
-                        kw in _c1.lower() or kw in _c2.lower()
-                        for kw in ("ablation", "control", "baseline", "null",
-                                   "no_harmonic", "single_mode")
-                    )
-                    if _is_null_result or _is_control_pair:
+                    # Check if identical outputs are EXPECTED (null-result experiment
+                    # or ablation-as-control pair).  Detection logic lives in
+                    # researchclaw.literature.domain_queries to keep it out of here.
+                    _topic_str = config.research.topic if config else ""
+                    if is_null_result_topic(_topic_str) or is_ablation_control_pair(_c1, _c2):
                         _warn = (
                             f"NULL RESULT NOTE: Conditions '{_c1}' and '{_c2}' produce "
                             f"identical outputs across all {len(_shared_keys)} metrics. "
