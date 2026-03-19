@@ -6,7 +6,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import sys
 import yaml
+
+DEFAULT_PYTHON_PATH = ".venv/Scripts/python.exe" if sys.platform == "win32" else ".venv/bin/python3"
 
 CONFIG_SEARCH_ORDER: tuple[str, ...] = ("config.arc.yaml", "config.yaml")
 
@@ -183,7 +186,7 @@ class SecurityConfig:
 
 @dataclass(frozen=True)
 class SandboxConfig:
-    python_path: str = ".venv/bin/python3"
+    python_path: str = DEFAULT_PYTHON_PATH
     gpu_required: bool = False
     allowed_imports: tuple[str, ...] = (
         "math",
@@ -655,7 +658,7 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         metric_direction=data.get("metric_direction", "minimize"),
         keep_threshold=_safe_float(data.get("keep_threshold"), 0.0),
         sandbox=SandboxConfig(
-            python_path=sandbox_data.get("python_path", ".venv/bin/python3"),
+            python_path=sandbox_data.get("python_path", DEFAULT_PYTHON_PATH),
             gpu_required=bool(sandbox_data.get("gpu_required", False)),
             allowed_imports=tuple(
                 sandbox_data.get("allowed_imports", SandboxConfig.allowed_imports)

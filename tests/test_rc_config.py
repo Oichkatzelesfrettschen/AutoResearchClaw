@@ -248,9 +248,10 @@ def test_experiment_config_defaults_mode_is_simulated():
 
 
 def test_sandbox_config_defaults_match_expected_values():
+    from researchclaw.config import DEFAULT_PYTHON_PATH
     defaults = SandboxConfig()
 
-    assert defaults.python_path == ".venv/bin/python3"
+    assert defaults.python_path == DEFAULT_PYTHON_PATH
     assert defaults.gpu_required is False
     assert defaults.max_memory_mb == 4096
     assert "numpy" in defaults.allowed_imports

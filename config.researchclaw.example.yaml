@@ -66,6 +66,7 @@ experiment:
   metric_key: "primary_metric"
   metric_direction: "minimize"
   sandbox:
+    # Use ".venv/Scripts/python.exe" on Windows
     python_path: ".venv/bin/python3"
     gpu_required: false
     max_memory_mb: 4096
