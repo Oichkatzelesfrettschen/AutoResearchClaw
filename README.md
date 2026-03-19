@@ -397,7 +397,7 @@ runtime:
 
 # === LLM ===
 llm:
-  provider: "openai-compatible"    # "openai-compatible" (default) or "acp"
+  provider: "openai-compatible"    # openai | openrouter | deepseek | minimax | acp | openai-compatible
   base_url: "https://..."          # API endpoint (required for openai-compatible)
   api_key_env: "OPENAI_API_KEY"    # Env var for API key (required for openai-compatible)
   api_key: ""                      # Or hardcode key here

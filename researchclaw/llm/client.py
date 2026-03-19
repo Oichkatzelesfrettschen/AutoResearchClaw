@@ -336,10 +336,16 @@ class LLMClient:
             # retries and model-fallback — each attempt must start from the
             # original, un-modified messages).
             msgs = [dict(m) for m in messages]
+
+            # MiniMax API requires temperature in [0, 1.0]
+            _temp = temperature
+            if "api.minimax.io" in self.config.base_url:
+                _temp = max(0.0, min(_temp, 1.0))
+
             body: dict[str, Any] = {
                 "model": model,
                 "messages": msgs,
-                "temperature": temperature,
+                "temperature": _temp,
             }
 
             # Use correct token parameter based on model
