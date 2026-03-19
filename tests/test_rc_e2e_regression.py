@@ -157,7 +157,14 @@ class TestDegradationChain:
                         "researchclaw.literature.cache._DEFAULT_CACHE_DIR",
                         tmp_path / "empty-cache",
                     ):
-                        papers = search_papers("no results query", limit=20)
+                        # Restrict to the original 3 sources so the test
+                        # does not depend on which new sources happen to
+                        # return results for an arbitrary query string.
+                        papers = search_papers(
+                            "no results query",
+                            limit=20,
+                            sources=("openalex", "semantic_scholar", "arxiv"),
+                        )
 
         assert papers == []
 
