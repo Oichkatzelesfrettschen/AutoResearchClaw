@@ -271,6 +271,19 @@ _KEYWORD_RULES: list[tuple[list[str], str]] = [
       "network traffic", "cybersecurity", "vulnerability",
       "threat detection", "scapy"], "security_detection"),
 
+    # Neuroscience
+    (["spiking neural", "spike train", "brian2", "hodgkin-huxley",
+      "integrate-and-fire", "lif model", "izhikevich",
+      "membrane potential", "action potential", "neural circuit",
+      "neural dynamics", "population coding", "neural decoding",
+      "raster plot", "firing rate", "synaptic", "connectome"],
+     "neuroscience_computational"),
+    (["fmri", "eeg", "meg", "neuroimaging", "brain imaging",
+      "nilearn", "mne-python", "bold signal", "brain network",
+      "functional connectivity"], "neuroscience_imaging"),
+    (["neuroscience", "neuron model", "brain simulation",
+      "neural computation", "neural encoding"], "neuroscience_computational"),
+
     # Robotics / Control
     (["robot", "robotic", "control", "manipulation",
       "mujoco", "pybullet", "locomotion", "navigation"],
@@ -317,6 +330,8 @@ Available domains:
 - mathematics_numerical: Numerical methods (ODE/PDE solvers, convergence)
 - mathematics_optimization: Optimization (convex, evolutionary)
 - security_detection: Security/intrusion detection
+- neuroscience_computational: Computational neuroscience (spiking networks, neural dynamics, population coding)
+- neuroscience_imaging: Brain imaging analysis (fMRI, EEG, MEG, functional connectivity)
 - robotics_control: Robotics and control
 - generic: Cannot classify / cross-domain
 

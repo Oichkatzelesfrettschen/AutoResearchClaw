@@ -294,6 +294,11 @@ def _build_adapter_registry() -> dict[str, type[PromptAdapter]]:
         registry["robotics_"] = RoboticsPromptAdapter
     except ImportError:
         pass
+    try:
+        from researchclaw.domains.adapters.neuroscience import NeurosciencePromptAdapter
+        registry["neuroscience_"] = NeurosciencePromptAdapter
+    except ImportError:
+        pass
     return registry
 
 
