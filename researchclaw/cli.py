@@ -28,11 +28,12 @@ from researchclaw.health import print_doctor_report, run_doctor, write_doctor_re
 
 def _is_opencode_installed() -> bool:
     """Check if the ``opencode`` CLI is available on PATH."""
-    if shutil.which("opencode") is None:
+    opencode_cmd = shutil.which("opencode")
+    if opencode_cmd is None:
         return False
     try:
         r = subprocess.run(
-            ["opencode", "--version"],
+            [opencode_cmd, "--version"],
             capture_output=True, text=True, timeout=15,
         )
         return r.returncode == 0
@@ -48,9 +49,13 @@ def _is_npm_installed() -> bool:
 def _install_opencode() -> bool:
     """Install OpenCode globally via npm.  Returns True on success."""
     print("  Installing opencode-ai (this may take a minute)...")
+    npm_cmd = shutil.which("npm")
+    if not npm_cmd:
+        print("  npm is not installed. Cannot install OpenCode.")
+        return False
     try:
         r = subprocess.run(
-            ["npm", "i", "-g", "opencode-ai@latest"],
+            [npm_cmd, "i", "-g", "opencode-ai@latest"],
             capture_output=True, text=True, timeout=120,
         )
         if r.returncode == 0:
@@ -450,8 +455,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # 1. OpenCode
     if _is_opencode_installed():
         try:
+            opencode_cmd = shutil.which("opencode")
             r = subprocess.run(
-                ["opencode", "--version"],
+                [opencode_cmd, "--version"],
                 capture_output=True, text=True, timeout=15,
             )
             ver = r.stdout.strip() or "unknown"
