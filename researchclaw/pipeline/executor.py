@@ -3651,7 +3651,12 @@ def _execute_code_generation(
         while not validation.ok and llm is not None and repair_attempt < max_repair:
             repair_attempt += 1
             attempt += 1
-            issues_text = format_issues_for_llm(validation)
+            # Only send errors to the LLM — warnings don't block validation
+            # and confuse the LLM into over-correcting (e.g. removing runtime imports)
+            errors_only = type(validation)(
+                issues=[i for i in validation.issues if i.severity == "error"]
+            )
+            issues_text = format_issues_for_llm(errors_only)
             validation_log.append(
                 f"File {fname} attempt {repair_attempt}: {validation.summary()}"
             )

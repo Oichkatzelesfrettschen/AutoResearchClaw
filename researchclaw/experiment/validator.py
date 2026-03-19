@@ -195,6 +195,8 @@ COMMON_SCIENCE: frozenset[str] = frozenset(
         "safetensors",
         "evaluate",
         "rouge_score",
+        # Runtime-injected by the experiment harness
+        "experiment_harness",
     }
 )
 
