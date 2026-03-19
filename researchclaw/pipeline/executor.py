@@ -1314,7 +1314,11 @@ def _detect_runtime_issues(sandbox_result: Any) -> str:
         for metric_name, vals in metric_values_by_name.items():
             if len(vals) >= 3:
                 unique = set(vals)
-                if len(unique) <= 2:
+                # Only flag completely constant metrics (single unique value).
+                # Two distinct values can legitimately reflect real groupings
+                # (e.g., null-result conditions vs a high-SNR baseline in physics
+                # experiments) and must not be treated as placeholders.
+                if len(unique) == 1:
                     issues.append(
                         f"DUMMY METRIC: '{metric_name}' has only {len(unique)} unique value(s) "
                         f"across {len(vals)} entries ({unique}) — likely a placeholder. "
