@@ -323,15 +323,22 @@ class ACPClient:
 
     def _send_prompt_cli(self, acpx: str, prompt: str) -> str:
         """Send prompt as a CLI argument (original path)."""
-        result = subprocess.run(
-            self._base_cmd(acpx) + [prompt],
-            capture_output=True, text=True,
-            timeout=self.config.timeout_sec,
-        )
+        try:
+            result = subprocess.run(
+                self._base_cmd(acpx) + [prompt],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=self.config.timeout_sec,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"ACP prompt timed out after {self.config.timeout_sec}s"
+            ) from exc
 
         if result.returncode != 0:
-            stderr = result.stderr.strip()
-            raise RuntimeError(f"ACP prompt failed (exit {result.returncode}): {stderr}")
+            stderr = (result.stderr or "").strip()
+            raise RuntimeError(
+                f"ACP prompt failed (exit {result.returncode}): {stderr}"
+            )
 
         return self._extract_response(result.stdout)
 
@@ -351,14 +358,19 @@ class ACPClient:
                 f"just produce the requested output."
             )
 
-            result = subprocess.run(
-                self._base_cmd(acpx) + [short_prompt],
-                capture_output=True, text=True,
-                timeout=self.config.timeout_sec,
-            )
+            try:
+                result = subprocess.run(
+                    self._base_cmd(acpx) + [short_prompt],
+                    capture_output=True, text=True, encoding="utf-8",
+                    errors="replace", timeout=self.config.timeout_sec,
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError(
+                    f"ACP prompt timed out after {self.config.timeout_sec}s"
+                ) from exc
 
             if result.returncode != 0:
-                stderr = result.stderr.strip()
+                stderr = (result.stderr or "").strip()
                 raise RuntimeError(
                     f"ACP prompt failed (exit {result.returncode}): {stderr}"
                 )

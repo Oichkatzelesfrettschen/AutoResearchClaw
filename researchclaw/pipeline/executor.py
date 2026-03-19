@@ -875,7 +875,9 @@ def _collect_experiment_results(
             m = r.get("metrics") or {}
             if isinstance(m, dict) and key in m:
                 try:
-                    values.append(float(m[key]))
+                    _fv = float(m[key])
+                    if _fv == _fv and abs(_fv) != float("inf"):  # filter NaN/Inf
+                        values.append(_fv)
                 except (ValueError, TypeError):
                     pass
         if values:
@@ -3356,6 +3358,19 @@ def _execute_code_generation(
     except Exception:  # noqa: BLE001
         logger.debug("Domain guidance injection skipped", exc_info=True)
 
+    # BUG-R6-01: Add explicit implementation constraints to prevent LLM
+    # from substituting unrelated DL models for lightweight algorithms.
+    extra_guidance += (
+        "\n\nIMPLEMENTATION CONSTRAINTS (MUST FOLLOW):\n"
+        "- Implement EXACTLY the algorithm/method described in the topic.\n"
+        "- Do NOT replace the stated method with a deep-learning proxy "
+        "(e.g. ResNet, BERT, GPT, Gymnasium+SB3) unless the topic "
+        "EXPLICITLY requires deep learning.\n"
+        "- Prefer lightweight CPU-friendly libraries (numpy, scipy, "
+        "sklearn, pandas) unless deep learning is inherent to the topic.\n"
+        "- The experiment MUST be self-contained and runnable without GPU.\n"
+    )
+
     # --- Code generation: Beast Mode → CodeAgent → Legacy single-shot ---
     _code_agent_active = False
     _beast_mode_used = False
@@ -3857,7 +3872,7 @@ def _execute_code_generation(
         try:
             repair_resp = _chat_with_prompt(
                 llm,
-                _pm.prompts["code_generation"]["system"],
+                _pm.system("code_generation"),
                 repair_prompt,
                 max_tokens=_code_max_tokens,
             )
@@ -3992,7 +4007,7 @@ def _execute_code_generation(
                     try:
                         fix_resp = _chat_with_prompt(
                             llm,
-                            _pm.prompts["code_generation"]["system"],
+                            _pm.system("code_generation"),
                             fix_prompt,
                             max_tokens=_code_max_tokens,
                         )
@@ -4051,34 +4066,82 @@ def _execute_code_generation(
                     "Stage 10: Topic-experiment MISALIGNMENT detected: %s",
                     alignment_note,
                 )
-                # Attempt one regeneration with explicit alignment instruction
-                regen_prompt = (
-                    f"The experiment code you previously generated does NOT align "
-                    f"with the research topic.\n\n"
-                    f"TOPIC: {config.research.topic}\n"
-                    f"MISALIGNMENT: {alignment_note}\n"
-                    f"SUGGESTIONS: {suggestions}\n\n"
-                    f"REGENERATE the experiment code to DIRECTLY test the stated "
-                    f"topic. The code MUST implement the core technique described "
-                    f"in the topic, not a generic proxy.\n\n"
-                    f"{pkg_hint}\n{compute_budget}\n"
-                    f"PLAN:\n{exp_plan}\n\n"
-                    f"Return multiple files using ```filename:xxx.py format."
-                )
-                regen_resp = _chat_with_prompt(
-                    llm,
-                    system=_pm.prompts["code_generation"]["system"],
-                    user=regen_prompt,
-                    max_tokens=_code_max_tokens,
-                )
-                regen_files = _extract_multi_file_blocks(regen_resp.content)
-                if regen_files and "main.py" in regen_files:
+                # BUG-R6-01: Allow up to 2 regeneration attempts with re-check.
+                _max_regen = 2
+                for _regen_attempt in range(1, _max_regen + 1):
+                    logger.info(
+                        "Stage 10: Alignment regen attempt %d/%d",
+                        _regen_attempt, _max_regen,
+                    )
+                    regen_prompt = (
+                        f"The experiment code you previously generated does NOT align "
+                        f"with the research topic.\n\n"
+                        f"TOPIC: {config.research.topic}\n"
+                        f"MISALIGNMENT: {alignment_note}\n"
+                        f"SUGGESTIONS: {suggestions}\n\n"
+                        f"REGENERATE the experiment code to DIRECTLY test the stated "
+                        f"topic. The code MUST implement the core technique described "
+                        f"in the topic, not a generic proxy.\n\n"
+                        f"CRITICAL CONSTRAINTS:\n"
+                        f"- You MUST implement the EXACT algorithm/method from the topic.\n"
+                        f"- Do NOT substitute a deep-learning proxy (ResNet, BERT, etc.) "
+                        f"when the topic describes a tabular, bandit, or game-theoretic method.\n"
+                        f"- Use ONLY lightweight CPU-friendly libraries (numpy, scipy, "
+                        f"sklearn) unless the topic EXPLICITLY requires deep learning.\n"
+                        f"- The experiment must be self-contained and runnable without GPU.\n\n"
+                        f"{pkg_hint}\n{compute_budget}\n"
+                        f"PLAN:\n{exp_plan}\n\n"
+                        f"Return multiple files using ```filename:xxx.py format."
+                    )
+                    regen_resp = _chat_with_prompt(
+                        llm,
+                        system=_pm.system("code_generation"),
+                        user=regen_prompt,
+                        max_tokens=_code_max_tokens,
+                    )
+                    regen_files = _extract_multi_file_blocks(regen_resp.content)
+                    if not regen_files or "main.py" not in regen_files:
+                        logger.warning(
+                            "Stage 10: Regen attempt %d produced no main.py",
+                            _regen_attempt,
+                        )
+                        continue
                     files = regen_files
                     for fname, code in files.items():
                         (exp_dir / fname).write_text(code, encoding="utf-8")
-                    alignment_ok = True
-                    alignment_note = "Regenerated after alignment check"
-                    logger.info("Stage 10: Code regenerated after alignment fix")
+                    # Re-check alignment on regenerated code
+                    recheck_code = "\n\n".join(
+                        f"# --- {fn} ---\n{cd}" for fn, cd in files.items()
+                    )
+                    if len(recheck_code) > 8000:
+                        recheck_code = recheck_code[:8000] + "\n... [truncated]"
+                    recheck_resp = llm.chat(
+                        [{"role": "user", "content": (
+                            f"Research topic: {config.research.topic}\n\n"
+                            f"Experiment code:\n```python\n{recheck_code}\n```\n\n"
+                            "TASK: Evaluate whether this experiment code actually tests "
+                            "the stated research topic. Answer with JSON:\n"
+                            '{"aligned": true/false, "reason": "...", "suggestions": "..."}\n'
+                        )}],
+                        system="You are a scientific code reviewer checking topic-experiment alignment.",
+                        max_tokens=1024,
+                    )
+                    recheck_data = _safe_json_loads(recheck_resp.content, {})
+                    if isinstance(recheck_data, dict) and recheck_data.get("aligned", False):
+                        alignment_ok = True
+                        alignment_note = f"Regenerated after alignment check (attempt {_regen_attempt})"
+                        logger.info(
+                            "Stage 10: Code aligned after regen attempt %d",
+                            _regen_attempt,
+                        )
+                        break
+                    else:
+                        alignment_note = recheck_data.get("reason", alignment_note)
+                        suggestions = recheck_data.get("suggestions", suggestions)
+                        logger.warning(
+                            "Stage 10: Regen attempt %d still misaligned: %s",
+                            _regen_attempt, alignment_note,
+                        )
         except Exception as exc:
             logger.debug("Alignment check failed: %s", exc)
 
@@ -4130,7 +4193,7 @@ def _execute_code_generation(
                 try:
                     abl_repair_resp = _chat_with_prompt(
                         llm,
-                        _pm.prompts["code_generation"]["system"],
+                        _pm.system("code_generation"),
                         abl_repair_prompt,
                         max_tokens=_code_max_tokens,
                     )
@@ -4186,6 +4249,22 @@ Multi-file experiment project with {len(files)} file(s): {file_list}
     artifacts = ["experiment/", "experiment_spec.md"]
     if (stage_dir / "validation_report.md").exists():
         artifacts.append("validation_report.md")
+
+    # BUG-R6-01: Fail stage if alignment check detected persistent mismatch
+    # after all regen attempts, instead of silently proceeding.
+    if not alignment_ok:
+        logger.error(
+            "Stage 10: Persistent topic-experiment misalignment after all "
+            "regen attempts. Failing stage. Reason: %s",
+            alignment_note,
+        )
+        return StageResult(
+            stage=Stage.CODE_GENERATION,
+            status=StageStatus.FAILED,
+            artifacts=tuple(artifacts),
+            evidence_refs=tuple(f"stage-10/{a}" for a in artifacts),
+            error=f"Topic-experiment misalignment: {alignment_note}",
+        )
 
     return StageResult(
         stage=Stage.CODE_GENERATION,
@@ -4287,7 +4366,10 @@ def _execute_experiment_run(
             _all_code = code_text
             if exp_dir_path and Path(exp_dir_path).is_dir():
                 for _pyf in Path(exp_dir_path).glob("*.py"):
-                    _all_code += "\n" + _pyf.read_text(encoding="utf-8")
+                    try:
+                        _all_code += "\n" + _pyf.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        pass
             _ensure_sandbox_deps(_all_code, config.experiment.sandbox.python_path)
 
         sandbox = create_sandbox(config.experiment, runs_dir / "sandbox")
@@ -4948,6 +5030,31 @@ def _execute_iterative_refine(
             candidate_files.update(extracted_files)
         # If LLM returned nothing at all, candidate_files == best_files (unchanged)
 
+        # BUG-R6-02: Preserve entry point when LLM strips main() function.
+        # The LLM often returns only class/function improvements without the
+        # main() entry point, causing the script to exit with no output.
+        _new_main = candidate_files.get("main.py", "")
+        _old_main = best_files.get("main.py", "")
+        if (
+            _new_main
+            and _old_main
+            and "if __name__" not in _new_main
+            and "if __name__" in _old_main
+        ):
+            # Extract the entry-point block from original main.py
+            _ep_idx = _old_main.rfind("\ndef main(")
+            if _ep_idx == -1:
+                _ep_idx = _old_main.rfind("\nif __name__")
+            if _ep_idx != -1:
+                _entry_block = _old_main[_ep_idx:]
+                candidate_files["main.py"] = _new_main.rstrip() + "\n\n" + _entry_block
+                logger.info(
+                    "Stage 13 iter %d: restored entry point stripped by LLM "
+                    "(%d chars appended from original main.py)",
+                    iteration,
+                    len(_entry_block),
+                )
+
         # Validate main.py
         main_code = candidate_files.get("main.py", "")
         validation = validate_code(main_code)
@@ -5164,7 +5271,11 @@ def _execute_result_analysis(
     prompts: PromptManager | None = None,
 ) -> StageResult:
     # --- Collect experiment data ---
-    exp_data = _collect_experiment_results(run_dir)
+    exp_data = _collect_experiment_results(
+        run_dir,
+        metric_key=config.experiment.metric_key,
+        metric_direction=config.experiment.metric_direction,
+    )
     runs_dir = _read_prior_artifact(run_dir, "runs/") or ""
     context = ""
     if runs_dir:
@@ -5255,10 +5366,11 @@ def _execute_result_analysis(
                                 {"refinement_best_metrics": _refine_metrics},
                                 indent=2, default=str,
                             )
+                        _bm_val = _refine_data.get("best_metric")
                         logger.info(
                             "R13-1: Merged %d metrics from refinement_log (best_metric=%.4f)",
                             len(_refine_metrics),
-                            _refine_data.get("best_metric", 0),
+                            float(_bm_val) if isinstance(_bm_val, (int, float)) else 0.0,
                         )
         except (json.JSONDecodeError, OSError, KeyError):
             logger.warning("R13-1: Failed to parse refinement_log.json, using Stage 12 data")
@@ -5373,12 +5485,12 @@ def _execute_result_analysis(
             _cv["metrics"][f"{config.experiment.metric_key}_mean"] = round(_mean, 6)
             _cv["metrics"][f"{config.experiment.metric_key}_std"] = round(_std, 6)
             _cv["n_seeds"] = len(_vals)
-            # Bootstrap 95% CI
-            import random as _rng
-            _rng.seed(42)
+            # Bootstrap 95% CI (use local RNG to avoid corrupting global state)
+            import random as _rng_mod
+            _rng_local = _rng_mod.Random(42)
             _boot_means = []
             for _ in range(1000):
-                _sample = [_rng.choice(_vals) for _ in range(len(_vals))]
+                _sample = [_rng_local.choice(_vals) for _ in range(len(_vals))]
                 _boot_means.append(_stats_mod.mean(_sample))
             _boot_means.sort()
             _ci_low = round(_boot_means[int(0.025 * len(_boot_means))], 6)
@@ -5464,16 +5576,22 @@ def _execute_result_analysis(
         for _i in range(len(_cond_names)):
             for _j in range(_i + 1, len(_cond_names)):
                 _c1, _c2 = _cond_names[_i], _cond_names[_j]
-                _s1 = _condition_summaries[_c1]
-                _s2 = _condition_summaries[_c2]
-                # Compare mean values for all shared metrics
-                _shared_keys = set(_s1.keys()) & set(_s2.keys())
+                _s1_raw = _condition_summaries[_c1]
+                _s2_raw = _condition_summaries[_c2]
+                # BUG-133 fix: compare inner metrics dicts, not top-level keys
+                _s1_m = _s1_raw.get("metrics", {}) if isinstance(_s1_raw, dict) else {}
+                _s2_m = _s2_raw.get("metrics", {}) if isinstance(_s2_raw, dict) else {}
+                if not isinstance(_s1_m, dict):
+                    _s1_m = {}
+                if not isinstance(_s2_m, dict):
+                    _s2_m = {}
+                _shared_keys = set(_s1_m.keys()) & set(_s2_m.keys())
                 if not _shared_keys:
                     continue
                 _all_equal = True
                 for _sk in _shared_keys:
-                    _v1 = _s1[_sk].get("mean") if isinstance(_s1[_sk], dict) else _s1[_sk]
-                    _v2 = _s2[_sk].get("mean") if isinstance(_s2[_sk], dict) else _s2[_sk]
+                    _v1 = _s1_m[_sk]
+                    _v2 = _s2_m[_sk]
                     if _v1 != _v2:
                         _all_equal = False
                         break
@@ -5503,8 +5621,8 @@ def _execute_result_analysis(
                     # R5-BUG-03: Also flag near-identical conditions (< 1% relative diff)
                     _near_identical = True
                     for _sk in _shared_keys:
-                        _v1 = _s1[_sk].get("mean") if isinstance(_s1[_sk], dict) else _s1[_sk]
-                        _v2 = _s2[_sk].get("mean") if isinstance(_s2[_sk], dict) else _s2[_sk]
+                        _v1 = _s1_m[_sk]
+                        _v2 = _s2_m[_sk]
                         try:
                             _v1f, _v2f = float(_v1), float(_v2)
                             _denom = max(abs(_v1f), abs(_v2f), 1e-12)
@@ -6972,7 +7090,9 @@ def _check_ablation_effectiveness(
             continue
         name_lower = name.lower()
         if any(tag in name_lower for tag in ("baseline", "control", "vanilla", "standard")):
-            metrics = data.get("metrics", {})
+            metrics = data.get("metrics") or {}
+            if not isinstance(metrics, dict):
+                metrics = {}
             # Use the first metric that has a _mean suffix or the first available
             for mk, mv in metrics.items():
                 if mk.endswith("_mean"):
@@ -7002,7 +7122,9 @@ def _check_ablation_effectiveness(
             continue
         if not any(tag in name_lower for tag in ("ablation", "no_", "without", "reduced")):
             continue
-        metrics = data.get("metrics", {})
+        metrics = data.get("metrics") or {}
+        if not isinstance(metrics, dict):
+            metrics = {}
         for mk, mv in metrics.items():
             if not mk.endswith("_mean"):
                 continue
@@ -7196,7 +7318,10 @@ def _execute_paper_draft(
                         continue
                     sr = cdata.get("success_rate")
                     if sr is not None:
-                        cond_block += f"- Success rate: {sr:.1%}\n"
+                        try:
+                            cond_block += f"- Success rate: {float(sr):.1%}\n"
+                        except (ValueError, TypeError):
+                            cond_block += f"- Success rate: {sr}\n"
                     ns = cdata.get("n_seeds") or cdata.get("n_seed_metrics")
                     if ns:
                         cond_block += f"- Seeds: {ns}\n"
@@ -7207,8 +7332,8 @@ def _execute_paper_draft(
                             cond_block += f"- Bootstrap 95% CI: [{float(ci_lo):.4f}, {float(ci_hi):.4f}]\n"
                         except (ValueError, TypeError):
                             cond_block += f"- Bootstrap 95% CI: [{ci_lo}, {ci_hi}]\n"
-                    cm = cdata.get("metrics", {})
-                    if cm:
+                    cm = cdata.get("metrics") or {}
+                    if isinstance(cm, dict) and cm:
                         for mk, mv in sorted(cm.items()):
                             if isinstance(mv, (int, float)):
                                 cond_block += f"- {mk}: {mv:.4f}\n"
@@ -7359,7 +7484,7 @@ def _execute_paper_draft(
             if _abl_warnings:
                 _abl_block = (
                     "\n\n## ABLATION EFFECTIVENESS WARNINGS\n"
-                    "The following ablations showed minimal effect (within 5%% of baseline). "
+                    "The following ablations showed minimal effect (within 5% of baseline). "
                     "Discuss this honestly — it may indicate the ablated component is not "
                     "important, or the ablation was not properly implemented:\n"
                 )
@@ -8923,8 +9048,12 @@ def _execute_export_publish(
                         f"[{_ay_pat}]", f"[{_ay_key}]"
                     )
                     # Handle within multi-citation brackets [A et al., 2020; B et al., 2021]
-                    # Replace the author-year segment inside brackets
-                    final_paper = final_paper.replace(_ay_pat, _ay_key)
+                    # Replace the author-year segment only inside [...] brackets
+                    final_paper = _re.sub(
+                        r'\[([^\]]*?)' + _re.escape(_ay_pat) + r'([^\]]*?)\]',
+                        lambda _m: '[' + _m.group(1) + _ay_key + _m.group(2) + ']',
+                        final_paper,
+                    )
                 # Fix multi-key brackets: [key1; key2] → [key1, key2]
                 # (author-year uses semicolons, cite-keys use commas)
                 def _fix_semicolon_cites(m_sc: _re.Match[str]) -> str:
@@ -8943,7 +9072,7 @@ def _execute_export_publish(
                 )
 
         # R10-Fix4: Citation cross-validation
-        cited_keys_in_paper = set(_re.findall(r"\[([a-z]+\d{4}[a-z]*)\]", final_paper))
+        cited_keys_in_paper = set(_re.findall(r"\[([a-zA-Z]+\d{4}[a-zA-Z0-9_-]*)\]", final_paper))
         if valid_keys and cited_keys_in_paper:
             invalid_keys = cited_keys_in_paper - valid_keys
             if invalid_keys:
@@ -9016,7 +9145,7 @@ def _execute_export_publish(
             _all_cited: set[str] = set()
             # Bracket-format citations [key]
             _all_cited.update(
-                _re.findall(r"\[([a-z]+\d{4}[a-z]*)\]", final_paper)
+                _re.findall(r"\[([a-zA-Z]+\d{4}[a-zA-Z0-9_-]*)\]", final_paper)
             )
             # \cite{key, key2} format (original + latex-converted)
             for _src in (
@@ -9680,7 +9809,7 @@ def _execute_citation_verify(
         _vbib_keys = set(re.findall(r"@\w+\{([^,]+),", verified_bib))
         _cited_in_paper: set[str] = set()
         _cited_in_paper.update(
-            re.findall(r"\[([a-z]+\d{4}[a-z]*)\]", paper_text)
+            re.findall(r"\[([a-zA-Z]+\d{4}[a-zA-Z0-9_-]*)\]", paper_text)
         )
         for _cm in re.finditer(r"\\cite\{([^}]+)\}", paper_text):
             _cited_in_paper.update(

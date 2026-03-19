@@ -121,11 +121,14 @@ class VerificationReport:
 # ---------------------------------------------------------------------------
 
 _ENTRY_RE = re.compile(
-    r"@(\w+)\s*\{\s*([^,\s]+)\s*,\s*(.*?)\n\s*\}",
+    r"@(\w+)\s*\{\s*([^,\s]+)\s*,\s*(.*?)\s*\}(?=\s*(?:@|\Z))",
     re.DOTALL,
 )
 
-_FIELD_RE = re.compile(r"(\w+)\s*=\s*\{((?:[^{}]|\{[^{}]*\})*)\}", re.DOTALL)
+_FIELD_RE = re.compile(
+    r"(\w+)\s*=\s*\{((?:[^{}]|\{(?:[^{}]|\{[^{}]*\})*\})*)\}",
+    re.DOTALL,
+)
 
 
 def parse_bibtex_entries(bib_text: str) -> list[dict[str, str]]:
@@ -454,7 +457,7 @@ def verify_by_openalex(title: str) -> CitationResult | None:
     Returns *None* only on network failure (allows fallthrough to S2).
     """
     params = urllib.parse.urlencode({
-        "filter": f"title.search:{title}",
+        "filter": "title.search:" + title.replace(",", " ").replace(":", " "),
         "per_page": "5",
         "mailto": _OPENALEX_EMAIL,
     })
@@ -946,7 +949,7 @@ def annotate_paper_hallucinations(
     )
 
     # Clean up artifacts: double spaces, empty parenthetical citations, orphan punctuation
-    result = re.sub(r"\s{2,}", " ", result)
+    result = re.sub(r" {2,}", " ", result)
     result = re.sub(r"\(\s*\)", "", result)
     result = re.sub(r"\[\s*\]", "", result)
 

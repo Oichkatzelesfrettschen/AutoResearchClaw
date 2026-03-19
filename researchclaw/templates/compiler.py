@@ -146,6 +146,35 @@ def fix_common_latex_errors(
     fixes: list[str] = []
     fixed = tex_text
 
+    # --- Pre-error-loop fixes: structural repairs that prevent compilation ---
+
+    # Fix escaped braces in tabular column specs: \{lcccc\} → {lcccc}
+    if re.search(r"\\begin\{tabular\}\\\{", fixed):
+        fixed = re.sub(
+            r"\\begin\{tabular\}\\\{([^}]*?)\\\}",
+            r"\\begin{tabular}{\1}",
+            fixed,
+        )
+        fixes.append("Fixed escaped braces in tabular column specs")
+
+    # Collapse multiple consecutive \clearpage into one
+    if re.search(r"(\\clearpage\s*){2,}", fixed):
+        fixed = re.sub(r"(\\clearpage\s*){2,}", "\\clearpage\n", fixed)
+        fixes.append("Collapsed multiple \\clearpage commands")
+
+    # Remove \textbf{Figure N.} paragraphs that follow \end{figure}
+    dup_cap = re.search(
+        r"(\\end\{figure\})\s*\n\s*\\textbf\{Figure\s+\d+",
+        fixed,
+    )
+    if dup_cap:
+        fixed = re.sub(
+            r"(\\end\{figure\})\s*\n\s*\\textbf\{Figure\s+\d+[.:].*?\}\s*\n",
+            r"\1\n",
+            fixed,
+        )
+        fixes.append("Removed duplicate bold Figure captions after \\end{figure}")
+
     for err in errors:
         err_lower = err.lower()
 
@@ -361,6 +390,37 @@ def check_compiled_quality(
         )
 
     return result
+
+
+def remove_missing_figures(tex_text: str, stage_dir: Path) -> tuple[str, list[str]]:
+    """Remove \\begin{figure}...\\end{figure} blocks that reference missing images.
+
+    Returns ``(fixed_text, list_of_removed_paths)``.
+    """
+    removed: list[str] = []
+
+    def _check_fig(m: re.Match) -> str:
+        block = m.group(0)
+        img_match = re.search(r"\\includegraphics.*?\{([^}]+)\}", block)
+        if img_match:
+            img_rel = img_match.group(1)
+            img_path = stage_dir / img_rel
+            if not img_path.exists():
+                logger.warning(
+                    "Removing figure block with missing image: %s",
+                    img_rel,
+                )
+                removed.append(img_rel)
+                return ""  # Remove the entire figure block
+        return block
+
+    fixed = re.sub(
+        r"\\begin\{figure\}.*?\\end\{figure\}",
+        _check_fig,
+        tex_text,
+        flags=re.DOTALL,
+    )
+    return fixed, removed
 
 
 def _run_bibtex(work_dir: Path, stem: str, timeout: int = 60) -> bool:

@@ -26,6 +26,14 @@ from researchclaw.utils.thinking_tags import strip_thinking_tags
 
 logger = logging.getLogger(__name__)
 
+
+def _safe_priority(val: object, default: int = 2) -> int:
+    """Convert priority to int, clamped to 1-3."""
+    try:
+        return max(1, min(3, int(val)))  # type: ignore[arg-type]
+    except (ValueError, TypeError):
+        return default
+
 # ---------------------------------------------------------------------------
 # Figure categories
 # ---------------------------------------------------------------------------
@@ -268,7 +276,7 @@ class FigureDecisionAgent(BaseAgent):
                 "figure_type": str(d.get("figure_type", "bar_comparison")),
                 "backend": str(d.get("backend", "code")),
                 "description": str(d.get("description", "")),
-                "priority": int(d.get("priority", 2)),
+                "priority": _safe_priority(d.get("priority", 2)),
             }
             # Validate backend
             if decision["backend"] not in ("code", "image"):

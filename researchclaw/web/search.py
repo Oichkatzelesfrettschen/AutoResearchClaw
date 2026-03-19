@@ -230,7 +230,14 @@ class WebSearchClient:
             title = re.sub(r"<[^>]+>", "", title_html).strip()
             snippet = re.sub(r"<[^>]+>", "", snippets[i]).strip() if i < len(snippets) else ""
             if "duckduckgo.com" in url:
-                continue
+                # Extract actual URL from DDG redirect: //duckduckgo.com/l/?uddg=https%3A...
+                from urllib.parse import urlparse as _urlparse, parse_qs as _parse_qs, unquote as _unquote
+                _parsed_ddg = _urlparse(url)
+                _uddg = _parse_qs(_parsed_ddg.query).get("uddg")
+                if _uddg:
+                    url = _unquote(_uddg[0])
+                else:
+                    continue
             results.append(SearchResult(title=title, url=url, snippet=snippet, source="duckduckgo"))
 
         return results

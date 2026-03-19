@@ -156,16 +156,19 @@ class DockerSandbox:
         # Inject harness first (immutable)
         self._inject_harness(staging)
 
-        # Copy project files (skip harness overwrite)
-        for src_file in project_dir.iterdir():
-            if src_file.is_file():
-                dest = staging / src_file.name
-                if dest.name == "experiment_harness.py":
-                    logger.warning(
-                        "Project contains experiment_harness.py — skipping (immutable)"
-                    )
-                    continue
-                dest.write_bytes(src_file.read_bytes())
+        # Copy project files and subdirectories (skip harness overwrite)
+        import shutil as _shutil
+        for src_item in project_dir.iterdir():
+            dest = staging / src_item.name
+            if src_item.name == "experiment_harness.py":
+                logger.warning(
+                    "Project contains experiment_harness.py — skipping (immutable)"
+                )
+                continue
+            if src_item.is_file():
+                dest.write_bytes(src_item.read_bytes())
+            elif src_item.is_dir() and not src_item.name.startswith((".", "__")):
+                _shutil.copytree(src_item, dest, dirs_exist_ok=True)
 
         # Post-copy resolve check — catches symlink-based escapes
         err = validate_entry_point_resolved(staging, entry_point)

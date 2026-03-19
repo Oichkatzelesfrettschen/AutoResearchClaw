@@ -474,6 +474,26 @@ def _deduplicate(papers: list[Paper]) -> list[Paper]:
         if norm:
             seen_title[norm] = idx
 
+    def _replace_at(old: Paper, new: Paper, idx: int) -> None:
+        """Replace paper at *idx* and clean up stale index entries."""
+        # Remove old identifiers that the new paper does NOT share
+        if old.doi:
+            old_doi = old.doi.lower().strip()
+            new_doi = new.doi.lower().strip() if new.doi else ""
+            if old_doi != new_doi and seen_doi.get(old_doi) == idx:
+                del seen_doi[old_doi]
+        if old.arxiv_id:
+            old_ax = old.arxiv_id.strip()
+            new_ax = new.arxiv_id.strip() if new.arxiv_id else ""
+            if old_ax != new_ax and seen_arxiv.get(old_ax) == idx:
+                del seen_arxiv[old_ax]
+        old_norm = _normalise_title(old.title)
+        new_norm = _normalise_title(new.title)
+        if old_norm and old_norm != new_norm and seen_title.get(old_norm) == idx:
+            del seen_title[old_norm]
+        result[idx] = new
+        _update_indices(new, idx)
+
     for paper in papers:
         is_dup = False
 
@@ -483,8 +503,7 @@ def _deduplicate(papers: list[Paper]) -> list[Paper]:
             if doi_key in seen_doi:
                 idx = seen_doi[doi_key]
                 if paper.citation_count > result[idx].citation_count:
-                    result[idx] = paper
-                    _update_indices(paper, idx)
+                    _replace_at(result[idx], paper, idx)
                 is_dup = True
 
         # Check arXiv ID
@@ -493,8 +512,7 @@ def _deduplicate(papers: list[Paper]) -> list[Paper]:
             if ax_key in seen_arxiv:
                 idx = seen_arxiv[ax_key]
                 if paper.citation_count > result[idx].citation_count:
-                    result[idx] = paper
-                    _update_indices(paper, idx)
+                    _replace_at(result[idx], paper, idx)
                 is_dup = True
 
         # Check fuzzy title
@@ -503,8 +521,7 @@ def _deduplicate(papers: list[Paper]) -> list[Paper]:
             if norm and norm in seen_title:
                 idx = seen_title[norm]
                 if paper.citation_count > result[idx].citation_count:
-                    result[idx] = paper
-                    _update_indices(paper, idx)
+                    _replace_at(result[idx], paper, idx)
                 is_dup = True
 
         if is_dup:

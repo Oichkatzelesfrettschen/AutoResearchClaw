@@ -855,7 +855,7 @@ class CodeAgent:
 
             self._log_event(
                 f"  Exec-fix iter {i}: crashed (rc={result.returncode}), "
-                f"stderr={len(result.stderr)} chars"
+                f"stderr={len(result.stderr or '')} chars"
             )
             files = self._fix_runtime_error(files, result)
 

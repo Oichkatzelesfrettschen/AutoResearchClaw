@@ -1073,6 +1073,20 @@ def _render_table(table_lines: list[str], caption: str = "") -> str:
     lines_out: list[str] = []
     lines_out.append("\\begin{table}[ht]")
     lines_out.append("\\centering")
+
+    # Caption ABOVE table (standard academic convention)
+    if caption:
+        cap_text = re.sub(r"^Table\s+\d+[.:]\s*", "", caption).strip()
+        if cap_text:
+            lines_out.append(f"\\caption{{{_convert_inline(cap_text)}}}")
+        else:
+            auto_cap = _auto_table_caption(header, table_num)
+            lines_out.append(f"\\caption{{{auto_cap}}}")
+    else:
+        auto_cap = _auto_table_caption(header, table_num)
+        lines_out.append(f"\\caption{{{auto_cap}}}")
+    lines_out.append(f"\\label{{tab:{table_num}}}")
+
     if needs_resize:
         # BUG-109b fix: Use \columnwidth (works in both 1-col and 2-col layouts)
         # \textwidth in 2-column formats (ICML) is full page width, causing
@@ -1094,20 +1108,6 @@ def _render_table(table_lines: list[str], caption: str = "") -> str:
     lines_out.append("\\end{tabular}")
     if needs_resize:
         lines_out.append("}")  # close resizebox
-
-    # IMP-32: Generate descriptive caption from header if caption is generic
-    if caption:
-        cap_text = re.sub(r"^Table\s+\d+[.:]\s*", "", caption).strip()
-        if cap_text:
-            lines_out.append(f"\\caption{{{_convert_inline(cap_text)}}}")
-        else:
-            # Caption was just "Table N" — generate from header
-            auto_cap = _auto_table_caption(header, table_num)
-            lines_out.append(f"\\caption{{{auto_cap}}}")
-    else:
-        auto_cap = _auto_table_caption(header, table_num)
-        lines_out.append(f"\\caption{{{auto_cap}}}")
-    lines_out.append(f"\\label{{tab:{table_num}}}")
     lines_out.append("\\end{table}")
 
     return "\n".join(lines_out)

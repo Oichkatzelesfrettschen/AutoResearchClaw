@@ -9,6 +9,41 @@ from typing import Any
 import yaml
 
 CONFIG_SEARCH_ORDER: tuple[str, ...] = ("config.arc.yaml", "config.yaml")
+
+
+def _safe_int(val: Any, default: int) -> int:
+    """Convert value to int, handling None/null YAML values."""
+    if val is None:
+        return default
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
+
+_VALID_NETWORK_POLICIES = {"none", "setup_only", "pip_only", "full"}
+
+
+def _validate_network_policy(val: object, default: str = "setup_only") -> str:
+    """Validate network_policy, falling back to *default* on bad values."""
+    s = str(val).strip().lower() if val else default
+    if s not in _VALID_NETWORK_POLICIES:
+        import logging as _cfg_log
+        _cfg_log.getLogger(__name__).warning(
+            "Invalid network_policy %r, using %r", val, default,
+        )
+        return default
+    return s
+
+
+def _safe_float(val: Any, default: float) -> float:
+    """Convert value to float, handling None/null YAML values."""
+    if val is None:
+        return default
+    try:
+        return float(val)
+    except (ValueError, TypeError):
+        return default
 EXAMPLE_CONFIG = "config.researchclaw.example.yaml"
 
 
@@ -613,19 +648,19 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
     colab_data = data.get("colab_drive") or {}
     return ExperimentConfig(
         mode=data.get("mode", "simulated"),
-        time_budget_sec=int(data.get("time_budget_sec", 300)),
-        max_iterations=int(data.get("max_iterations", 10)),
-        max_refine_duration_sec=int(data.get("max_refine_duration_sec", 0)),
+        time_budget_sec=_safe_int(data.get("time_budget_sec"), 300),
+        max_iterations=_safe_int(data.get("max_iterations"), 10),
+        max_refine_duration_sec=_safe_int(data.get("max_refine_duration_sec"), 0),
         metric_key=data.get("metric_key", "primary_metric"),
         metric_direction=data.get("metric_direction", "minimize"),
-        keep_threshold=float(data.get("keep_threshold", 0.0)),
+        keep_threshold=_safe_float(data.get("keep_threshold"), 0.0),
         sandbox=SandboxConfig(
             python_path=sandbox_data.get("python_path", ".venv/bin/python3"),
             gpu_required=bool(sandbox_data.get("gpu_required", False)),
             allowed_imports=tuple(
                 sandbox_data.get("allowed_imports", SandboxConfig.allowed_imports)
             ),
-            max_memory_mb=int(sandbox_data.get("max_memory_mb", 4096)),
+            max_memory_mb=_safe_int(sandbox_data.get("max_memory_mb"), 4096),
         ),
         docker=DockerSandboxConfig(
             image=docker_data.get("image", "researchclaw/experiment:latest"),
@@ -633,18 +668,20 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
             gpu_device_ids=tuple(
                 int(g) for g in docker_data.get("gpu_device_ids", ())
             ),
-            memory_limit_mb=int(docker_data.get("memory_limit_mb", 8192)),
-            network_policy=docker_data.get("network_policy", "setup_only"),
+            memory_limit_mb=_safe_int(docker_data.get("memory_limit_mb"), 8192),
+            network_policy=_validate_network_policy(
+                docker_data.get("network_policy", "setup_only"),
+            ),
             pip_pre_install=tuple(docker_data.get("pip_pre_install", ())),
             auto_install_deps=bool(docker_data.get("auto_install_deps", True)),
-            shm_size_mb=int(docker_data.get("shm_size_mb", 2048)),
+            shm_size_mb=_safe_int(docker_data.get("shm_size_mb"), 2048),
             container_python=docker_data.get("container_python", "/usr/bin/python3"),
             keep_containers=bool(docker_data.get("keep_containers", False)),
         ),
         ssh_remote=SshRemoteConfig(
             host=ssh_data.get("host", ""),
             user=ssh_data.get("user", ""),
-            port=int(ssh_data.get("port", 22)),
+            port=_safe_int(ssh_data.get("port"), 22),
             key_path=ssh_data.get("key_path", ""),
             gpu_ids=tuple(int(g) for g in ssh_data.get("gpu_ids", ())),
             remote_workdir=ssh_data.get(
@@ -654,17 +691,19 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
             setup_commands=tuple(ssh_data.get("setup_commands") or ()),
             use_docker=bool(ssh_data.get("use_docker", False)),
             docker_image=ssh_data.get("docker_image", "researchclaw/experiment:latest"),
-            docker_network_policy=ssh_data.get("docker_network_policy", "none"),
-            docker_memory_limit_mb=int(ssh_data.get("docker_memory_limit_mb", 8192)),
-            docker_shm_size_mb=int(ssh_data.get("docker_shm_size_mb", 2048)),
-            timeout_sec=int(ssh_data.get("timeout_sec", 600)),
-            scp_timeout_sec=int(ssh_data.get("scp_timeout_sec", 300)),
-            setup_timeout_sec=int(ssh_data.get("setup_timeout_sec", 300)),
+            docker_network_policy=_validate_network_policy(
+                ssh_data.get("docker_network_policy", "none"),
+            ),
+            docker_memory_limit_mb=_safe_int(ssh_data.get("docker_memory_limit_mb"), 8192),
+            docker_shm_size_mb=_safe_int(ssh_data.get("docker_shm_size_mb"), 2048),
+            timeout_sec=_safe_int(ssh_data.get("timeout_sec"), 600),
+            scp_timeout_sec=_safe_int(ssh_data.get("scp_timeout_sec"), 300),
+            setup_timeout_sec=_safe_int(ssh_data.get("setup_timeout_sec"), 300),
         ),
         colab_drive=ColabDriveConfig(
             drive_root=colab_data.get("drive_root", ""),
-            poll_interval_sec=int(colab_data.get("poll_interval_sec", 30)),
-            timeout_sec=int(colab_data.get("timeout_sec", 3600)),
+            poll_interval_sec=_safe_int(colab_data.get("poll_interval_sec"), 30),
+            timeout_sec=_safe_int(colab_data.get("timeout_sec"), 3600),
             setup_script=colab_data.get("setup_script", ""),
         ),
         code_agent=_parse_code_agent_config(data.get("code_agent") or {}),
@@ -682,15 +721,15 @@ def _parse_benchmark_agent_config(data: dict[str, Any]) -> BenchmarkAgentConfig:
     return BenchmarkAgentConfig(
         enabled=bool(data.get("enabled", True)),
         enable_hf_search=bool(data.get("enable_hf_search", True)),
-        max_hf_results=int(data.get("max_hf_results", 10)),
+        max_hf_results=_safe_int(data.get("max_hf_results"), 10),
         enable_web_search=bool(data.get("enable_web_search", True)),
-        max_web_results=int(data.get("max_web_results", 5)),
-        web_search_min_local=int(data.get("web_search_min_local", 3)),
-        tier_limit=int(data.get("tier_limit", 2)),
-        min_benchmarks=int(data.get("min_benchmarks", 1)),
-        min_baselines=int(data.get("min_baselines", 2)),
+        max_web_results=_safe_int(data.get("max_web_results"), 5),
+        web_search_min_local=_safe_int(data.get("web_search_min_local"), 3),
+        tier_limit=_safe_int(data.get("tier_limit"), 2),
+        min_benchmarks=_safe_int(data.get("min_benchmarks"), 1),
+        min_baselines=_safe_int(data.get("min_baselines"), 2),
         prefer_cached=bool(data.get("prefer_cached", True)),
-        max_iterations=int(data.get("max_iterations", 2)),
+        max_iterations=_safe_int(data.get("max_iterations"), 2),
     )
 
 
@@ -700,10 +739,10 @@ def _parse_figure_agent_config(data: dict[str, Any]) -> FigureAgentConfig:
     use_docker_raw = data.get("use_docker", None)
     return FigureAgentConfig(
         enabled=bool(data.get("enabled", True)),
-        min_figures=int(data.get("min_figures", 3)),
-        max_figures=int(data.get("max_figures", 8)),
-        max_iterations=int(data.get("max_iterations", 3)),
-        render_timeout_sec=int(data.get("render_timeout_sec", 30)),
+        min_figures=_safe_int(data.get("min_figures"), 3),
+        max_figures=_safe_int(data.get("max_figures"), 8),
+        max_iterations=_safe_int(data.get("max_iterations"), 3),
+        render_timeout_sec=_safe_int(data.get("render_timeout_sec"), 30),
         use_docker=(
             None if use_docker_raw is None else bool(use_docker_raw)
         ),
@@ -713,7 +752,7 @@ def _parse_figure_agent_config(data: dict[str, Any]) -> FigureAgentConfig:
         gemini_model=data.get("gemini_model", "gemini-2.5-flash-image"),
         nano_banana_enabled=bool(data.get("nano_banana_enabled", True)),
         strict_mode=bool(data.get("strict_mode", False)),
-        dpi=int(data.get("dpi", 300)),
+        dpi=_safe_int(data.get("dpi"), 300),
     )
 
 
@@ -725,18 +764,16 @@ def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
         architecture_planning=bool(data.get("architecture_planning", True)),
         sequential_generation=bool(data.get("sequential_generation", True)),
         hard_validation=bool(data.get("hard_validation", True)),
-        hard_validation_max_repairs=int(
-            data.get("hard_validation_max_repairs", 2)
-        ),
-        exec_fix_max_iterations=int(data.get("exec_fix_max_iterations", 3)),
-        exec_fix_timeout_sec=int(data.get("exec_fix_timeout_sec", 60)),
+        hard_validation_max_repairs=_safe_int(data.get("hard_validation_max_repairs"), 2),
+        exec_fix_max_iterations=_safe_int(data.get("exec_fix_max_iterations"), 3),
+        exec_fix_timeout_sec=_safe_int(data.get("exec_fix_timeout_sec"), 60),
         tree_search_enabled=bool(data.get("tree_search_enabled", False)),
-        tree_search_candidates=int(data.get("tree_search_candidates", 3)),
-        tree_search_max_depth=int(data.get("tree_search_max_depth", 2)),
+        tree_search_candidates=_safe_int(data.get("tree_search_candidates"), 3),
+        tree_search_max_depth=_safe_int(data.get("tree_search_max_depth"), 2),
         tree_search_eval_timeout_sec=int(
             data.get("tree_search_eval_timeout_sec", 120)
         ),
-        review_max_rounds=int(data.get("review_max_rounds", 2)),
+        review_max_rounds=_safe_int(data.get("review_max_rounds"), 2),
     )
 
 
@@ -746,10 +783,10 @@ def _parse_opencode_config(data: dict[str, Any]) -> OpenCodeConfig:
     return OpenCodeConfig(
         enabled=bool(data.get("enabled", True)),
         auto=bool(data.get("auto", True)),
-        complexity_threshold=float(data.get("complexity_threshold", 0.2)),
+        complexity_threshold=_safe_float(data.get("complexity_threshold"), 0.2),
         model=str(data.get("model", "")),
-        timeout_sec=int(data.get("timeout_sec", 600)),
-        max_retries=int(data.get("max_retries", 1)),
+        timeout_sec=_safe_int(data.get("timeout_sec"), 600),
+        max_retries=_safe_int(data.get("max_retries"), 1),
         workspace_cleanup=bool(data.get("workspace_cleanup", True)),
     )
 

@@ -609,9 +609,12 @@ class OpenCodeBridge:
                     continue
 
                 # Write log
-                (stage_dir / "opencode_log.txt").write_text(
-                    log, encoding="utf-8",
-                )
+                try:
+                    (stage_dir / "opencode_log.txt").write_text(
+                        log or "", encoding="utf-8",
+                    )
+                except OSError as _wexc:
+                    logger.warning("Beast mode: failed to write log: %s", _wexc)
 
                 # Cleanup workspace if configured
                 if self._workspace_cleanup and workspace.exists():
