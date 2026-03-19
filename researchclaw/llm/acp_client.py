@@ -413,16 +413,20 @@ class ACPClient:
     ) -> str:
         """Flatten a chat-messages list into a single text prompt.
 
-        Preserves role labels so the agent can distinguish context.
+        System content is inlined as a plain instruction block so that
+        Claude Code does not mistake it for automated pipeline noise.
+        The [System] bracket-label was previously used here but caused
+        Claude Code sessions with memory to filter the entire prompt as
+        an automation artifact they should ignore.
         """
         parts: list[str] = []
         if system:
-            parts.append(f"[System]\n{system}")
+            parts.append(system)
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             if role == "system":
-                parts.append(f"[System]\n{content}")
+                parts.append(content)
             elif role == "assistant":
                 parts.append(f"[Previous Response]\n{content}")
             else:
