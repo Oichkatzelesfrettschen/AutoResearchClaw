@@ -129,14 +129,11 @@ class TestOpenCodeBridge:
     """Tests for the OpenCode bridge class."""
 
     def test_check_available_returns_false_when_not_installed(self):
-        with patch(
-            "researchclaw.pipeline.opencode_bridge.subprocess.run",
-            side_effect=FileNotFoundError,
-        ):
+        with patch("shutil.which", return_value=None):
             assert OpenCodeBridge.check_available() is False
 
     def test_check_available_returns_false_on_timeout(self):
-        with patch(
+        with patch("shutil.which", return_value="/usr/bin/opencode"), patch(
             "researchclaw.pipeline.opencode_bridge.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="opencode", timeout=15),
         ):
@@ -145,7 +142,7 @@ class TestOpenCodeBridge:
     def test_check_available_returns_true(self):
         mock_result = MagicMock()
         mock_result.returncode = 0
-        with patch(
+        with patch("shutil.which", return_value="/usr/bin/opencode"), patch(
             "researchclaw.pipeline.opencode_bridge.subprocess.run",
             return_value=mock_result,
         ):
