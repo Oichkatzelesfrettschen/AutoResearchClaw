@@ -455,7 +455,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # 1. OpenCode
     if _is_opencode_installed():
         try:
-            opencode_cmd = shutil.which("opencode")
+            opencode_cmd = shutil.which("opencode") or "opencode"
             r = subprocess.run(
                 [opencode_cmd, "--version"],
                 capture_output=True, text=True, timeout=15,

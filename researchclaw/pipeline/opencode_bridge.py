@@ -283,7 +283,6 @@ class OpenCodeBridge:
     @staticmethod
     def check_available() -> bool:
         """Return True if the ``opencode`` CLI is installed and callable."""
-        import shutil
         opencode_cmd = shutil.which("opencode")
         if not opencode_cmd:
             return False
@@ -476,7 +475,6 @@ class OpenCodeBridge:
 
         # Use -m flag to specify model (more reliable than opencode.json)
         resolved_model = self._resolve_opencode_model()
-        import shutil
         opencode_cmd = shutil.which("opencode") or "opencode"
         cmd = [opencode_cmd, "run", "-m", resolved_model, "--format", "json", prompt]
 
