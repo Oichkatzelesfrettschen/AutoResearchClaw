@@ -750,6 +750,42 @@ class CodeAgent:
                                         f"'{target_file}' — will crash"
                                     )
 
+        # 7. BUG-R41-04: main.py MUST have an `if __name__ == "__main__"` block
+        #    and must call a training/experiment function — otherwise Docker runs
+        #    the file and exits 0 with no output.
+        main_code = files.get("main.py", "")
+        if main_code:
+            try:
+                main_tree = ast.parse(main_code)
+                has_main_guard = False
+                for node in ast.walk(main_tree):
+                    if isinstance(node, ast.If):
+                        # Check for `if __name__ == "__main__"` pattern
+                        test = node.test
+                        if isinstance(test, ast.Compare):
+                            left = test.left
+                            if (
+                                isinstance(left, ast.Name)
+                                and left.id == "__name__"
+                                and len(test.comparators) == 1
+                            ):
+                                comp = test.comparators[0]
+                                if (
+                                    isinstance(comp, ast.Constant)
+                                    and comp.value == "__main__"
+                                ):
+                                    has_main_guard = True
+                                    break
+                if not has_main_guard:
+                    critical.append(
+                        "[main.py] Missing `if __name__ == \"__main__\":` block — "
+                        "script will define functions/classes but never execute "
+                        "training. Add a main guard that calls the experiment entry "
+                        "point."
+                    )
+            except SyntaxError:
+                pass  # Already caught by syntax check above
+
         return critical, warnings
 
     def _repair_critical_issues(
@@ -1296,7 +1332,11 @@ class CodeAgent:
         run_dir = self._stage_dir / "agent_runs" / f"attempt_{self._runs:03d}"
         run_dir.mkdir(parents=True, exist_ok=True)
         for fname, code in files.items():
-            fpath = run_dir / fname
+            fpath = (run_dir / fname).resolve()
+            # BUG-CA-10: Prevent path traversal from LLM-generated filenames
+            if not fpath.is_relative_to(run_dir.resolve()):
+                self._log_event(f"  WARNING: Skipping path-traversal filename: {fname}")
+                continue
             fpath.parent.mkdir(parents=True, exist_ok=True)
             fpath.write_text(code, encoding="utf-8")
 

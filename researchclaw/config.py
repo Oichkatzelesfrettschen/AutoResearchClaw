@@ -334,6 +334,26 @@ class FigureAgentConfig:
 
 
 @dataclass(frozen=True)
+class ExperimentRepairConfig:
+    """Experiment repair loop — diagnose and fix failed experiments before paper writing.
+
+    When enabled, after Stage 14 (result_analysis) the pipeline:
+    1. Diagnoses experiment failures (missing deps, crashes, OOM, time guard, etc.)
+    2. Assesses experiment quality (full_paper / preliminary_study / technical_report)
+    3. If quality is insufficient, generates targeted repair prompts
+    4. Re-runs experiment with fixes, up to ``max_cycles`` times
+    5. Selects best results across all cycles for paper writing
+    """
+
+    enabled: bool = True
+    max_cycles: int = 3
+    min_completion_rate: float = 0.5  # At least 50% conditions must complete
+    min_conditions: int = 2  # At least 2 conditions for a valid experiment
+    use_opencode: bool = True  # Use OpenCode agent for repairs (vs LLM prompt)
+    timeout_sec_per_cycle: int = 600  # Max time per repair cycle
+
+
+@dataclass(frozen=True)
 class ExperimentConfig:
     mode: str = "simulated"
     time_budget_sec: int = 300
@@ -350,6 +370,7 @@ class ExperimentConfig:
     opencode: OpenCodeConfig = field(default_factory=OpenCodeConfig)
     benchmark_agent: BenchmarkAgentConfig = field(default_factory=BenchmarkAgentConfig)
     figure_agent: FigureAgentConfig = field(default_factory=FigureAgentConfig)
+    repair: ExperimentRepairConfig = field(default_factory=ExperimentRepairConfig)
 
 
 @dataclass(frozen=True)
@@ -715,6 +736,7 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
             data.get("benchmark_agent") or {}
         ),
         figure_agent=_parse_figure_agent_config(data.get("figure_agent") or {}),
+        repair=_parse_experiment_repair_config(data.get("repair") or {}),
     )
 
 
@@ -759,6 +781,19 @@ def _parse_figure_agent_config(data: dict[str, Any]) -> FigureAgentConfig:
     )
 
 
+def _parse_experiment_repair_config(data: dict[str, Any]) -> ExperimentRepairConfig:
+    if not data:
+        return ExperimentRepairConfig()
+    return ExperimentRepairConfig(
+        enabled=bool(data.get("enabled", True)),
+        max_cycles=_safe_int(data.get("max_cycles"), 3),
+        min_completion_rate=_safe_float(data.get("min_completion_rate"), 0.5),
+        min_conditions=_safe_int(data.get("min_conditions"), 2),
+        use_opencode=bool(data.get("use_opencode", True)),
+        timeout_sec_per_cycle=_safe_int(data.get("timeout_sec_per_cycle"), 600),
+    )
+
+
 def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
     if not data:
         return CodeAgentConfig()
@@ -773,8 +808,8 @@ def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
         tree_search_enabled=bool(data.get("tree_search_enabled", False)),
         tree_search_candidates=_safe_int(data.get("tree_search_candidates"), 3),
         tree_search_max_depth=_safe_int(data.get("tree_search_max_depth"), 2),
-        tree_search_eval_timeout_sec=int(
-            data.get("tree_search_eval_timeout_sec", 120)
+        tree_search_eval_timeout_sec=_safe_int(
+            data.get("tree_search_eval_timeout_sec"), 120
         ),
         review_max_rounds=_safe_int(data.get("review_max_rounds"), 2),
     )
@@ -809,8 +844,8 @@ def _parse_metaclaw_bridge_config(data: dict[str, Any]) -> MetaClawBridgeConfig:
             api_key_env=prm_data.get("api_key_env", ""),
             api_key=prm_data.get("api_key", ""),
             model=prm_data.get("model", "gpt-5.4"),
-            votes=int(prm_data.get("votes", 3)),
-            temperature=float(prm_data.get("temperature", 0.6)),
+            votes=_safe_int(prm_data.get("votes"), 3),
+            temperature=_safe_float(prm_data.get("temperature"), 0.6),
             gate_stages=tuple(
                 int(s) for s in prm_data.get("gate_stages", (5, 9, 15, 20))
             ),
@@ -818,7 +853,7 @@ def _parse_metaclaw_bridge_config(data: dict[str, Any]) -> MetaClawBridgeConfig:
         lesson_to_skill=MetaClawLessonToSkillConfig(
             enabled=bool(l2s_data.get("enabled", True)),
             min_severity=l2s_data.get("min_severity", "warning"),
-            max_skills_per_run=int(l2s_data.get("max_skills_per_run", 3)),
+            max_skills_per_run=_safe_int(l2s_data.get("max_skills_per_run"), 3),
         ),
     )
 

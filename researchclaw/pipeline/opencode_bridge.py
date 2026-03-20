@@ -345,6 +345,29 @@ class OpenCodeBridge:
             json.dumps(opencode_cfg, indent=2), encoding="utf-8",
         )
 
+        # OpenCode requires a git repository — initialise one with
+        # a single commit so that ``opencode run`` doesn't hang.
+        # BUG-OB-01/OB-02: Check return codes and catch TimeoutExpired.
+        try:
+            r = subprocess.run(
+                ["git", "init"],
+                cwd=str(ws), capture_output=True, timeout=10,
+            )
+            if r.returncode != 0:
+                raise OSError(f"git init failed: {r.stderr}")
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=str(ws), capture_output=True, timeout=10,
+            )
+            subprocess.run(
+                ["git", "-c", "user.email=beast@researchclaw",
+                 "-c", "user.name=BeastMode",
+                 "commit", "-m", "init workspace"],
+                cwd=str(ws), capture_output=True, timeout=10,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise OSError(f"git workspace init timed out: {exc}") from exc
+
         return ws
 
     def _is_azure(self) -> bool:
@@ -355,60 +378,22 @@ class OpenCodeBridge:
         )
 
     def _build_opencode_config(self) -> dict[str, Any]:
-        """Build the opencode.json configuration."""
+        """Build the opencode.json configuration.
+
+        Always uses the "openai" provider — this works for both standard
+        OpenAI endpoints and Azure OpenAI (which accepts Bearer token auth
+        on the ``/openai/v1`` path and now supports the Responses API).
+        """
         cfg: dict[str, Any] = {
             "$schema": "https://opencode.ai/config.json",
         }
 
-        if self._is_azure():
-            # Azure OpenAI provider — uses "azure" provider type in OpenCode
-            # Extract resource name from URL like:
-            #   https://myresource-eastus2.services.ai.azure.com/openai/v1
-            #   https://myresource.openai.azure.com/openai
-            resource_name = ""
-            if self._llm_base_url:
-                m = re.match(r"https?://([^.]+)", self._llm_base_url)
-                if m:
-                    resource_name = m.group(1)
-
-            # Normalize base URL: Azure provider wants the /openai path
-            base_url = self._llm_base_url.rstrip("/")
-            if not base_url.endswith("/openai"):
-                # Strip /v1 suffix if present, add /openai if needed
-                base_url = base_url.removesuffix("/v1")
-                if not base_url.endswith("/openai"):
-                    base_url += "/openai"
-
+        if self._llm_base_url:
             if self._model:
-                # If model already has a provider prefix (e.g. "anthropic/..."), use as-is
-                cfg["model"] = self._model if "/" in self._model else f"azure/{self._model}"
-            cfg["provider"] = {
-                "azure": {
-                    "options": {
-                        "apiKey": f"{{env:{self._api_key_env}}}"
-                        if self._api_key_env
-                        else "",
-                        "baseURL": base_url,
-                        "resourceName": resource_name,
-                    },
-                    "models": {},
-                }
-            }
-            # Register the model so OpenCode knows it exists
-            if self._model:
-                cfg["provider"]["azure"]["models"] = {
-                    self._model: {
-                        "name": self._model,
-                        "modalities": {
-                            "input": ["text"],
-                            "output": ["text"],
-                        },
-                    }
-                }
-        elif self._llm_base_url:
-            # Generic OpenAI-compatible provider
-            if self._model:
-                cfg["model"] = self._model if "/" in self._model else f"openai/{self._model}"
+                cfg["model"] = (
+                    self._model if "/" in self._model
+                    else f"openai/{self._model}"
+                )
             cfg["provider"] = {
                 "openai": {
                     "options": {
@@ -416,11 +401,27 @@ class OpenCodeBridge:
                         "apiKey": f"{{env:{self._api_key_env}}}"
                         if self._api_key_env
                         else "",
-                    }
+                    },
+                    "models": {},
                 }
             }
+            # Register the model so OpenCode knows it exists
+            if self._model:
+                model_name = self._model.split("/")[-1]
+                cfg["provider"]["openai"]["models"] = {
+                    model_name: {
+                        "name": model_name,
+                        "modalities": {
+                            "input": ["text"],
+                            "output": ["text"],
+                        },
+                    }
+                }
         elif self._model:
-            cfg["model"] = self._model if "/" in self._model else f"openai/{self._model}"
+            cfg["model"] = (
+                self._model if "/" in self._model
+                else f"openai/{self._model}"
+            )
 
         return cfg
 
@@ -429,28 +430,18 @@ class OpenCodeBridge:
     def _resolve_opencode_model(self) -> str:
         """Resolve the model identifier for OpenCode CLI's ``-m`` flag.
 
-        Azure OpenAI endpoints use the Responses API which many Azure deployments
-        don't support.  When the configured provider is Azure, we fall back to
-        using Anthropic models directly (which OpenCode supports natively) rather
-        than trying to proxy through Azure.
-
         Resolution order:
         1. If model already contains "/" (e.g. "anthropic/claude-sonnet-4-6") → use as-is
-        2. If NOT Azure → "openai/{model}"
-        3. If Azure → fall back to "anthropic/claude-sonnet-4-6" (reliable default)
+        2. Otherwise → "openai/{model}" (works for both Azure and standard OpenAI)
+
+        Note: Azure AI Services now supports the Responses API with Bearer
+        token auth via the OpenAI-compatible endpoint, so we use the "openai"
+        provider universally — no Anthropic fallback needed.
         """
         if not self._model:
             return "anthropic/claude-sonnet-4-6"
         if "/" in self._model:
             return self._model
-        if self._is_azure():
-            # Azure AI Services endpoints don't support OpenCode's Responses API.
-            # Fall back to Anthropic which OpenCode supports natively.
-            logger.info(
-                "Beast mode: Azure endpoint detected — using Anthropic model "
-                "for OpenCode (Azure doesn't support Responses API)"
-            )
-            return "anthropic/claude-sonnet-4-6"
         return f"openai/{self._model}"
 
     # -- invocation ------------------------------------------------------------
@@ -466,12 +457,10 @@ class OpenCodeBridge:
         if self._api_key_env:
             api_key = os.environ.get(self._api_key_env, "")
             if api_key:
-                # OpenCode reads AZURE_API_KEY for azure provider,
-                # OPENAI_API_KEY for openai provider
-                if self._is_azure():
-                    env["AZURE_API_KEY"] = api_key
-                else:
-                    env["OPENAI_API_KEY"] = api_key
+                # We always use the "openai" provider for OpenCode now,
+                # which reads OPENAI_API_KEY (works for Azure too via
+                # Bearer token auth on the OpenAI-compatible endpoint).
+                env["OPENAI_API_KEY"] = api_key
 
         # Use -m flag to specify model (more reliable than opencode.json)
         resolved_model = self._resolve_opencode_model()

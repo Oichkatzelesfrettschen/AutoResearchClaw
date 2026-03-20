@@ -152,8 +152,8 @@ class FigureDecisionAgent(BaseAgent):
                 # Enforce bounds
                 decisions = self._enforce_bounds(decisions, has_experiments)
 
-                return AgentStepResult(
-                    success=True,
+                return self._make_result(
+                    True,
                     data={
                         "decisions": decisions,
                         "code_figures": [
@@ -175,8 +175,8 @@ class FigureDecisionAgent(BaseAgent):
             condition_summaries=condition_summaries,
         )
 
-        return AgentStepResult(
-            success=True,
+        return self._make_result(
+            True,
             data={
                 "decisions": decisions,
                 "code_figures": [

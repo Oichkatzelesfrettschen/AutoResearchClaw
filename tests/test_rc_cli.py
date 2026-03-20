@@ -288,6 +288,94 @@ def test_cmd_run_missing_config_shows_init_hint(
     assert "researchclaw init" in capsys.readouterr().err
 
 
+def test_resume_finds_existing_checkpoint_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """BUG-119: --resume without --output should find the latest checkpoint dir."""
+    import hashlib
+    import json
+
+    monkeypatch.chdir(tmp_path)
+
+    # Write a valid config
+    config_path = tmp_path / "config.arc.yaml"
+    _write_valid_config(config_path)
+
+    # Create a fake previous run directory with a checkpoint
+    topic = "Synthetic benchmark research"  # matches _write_valid_config
+    topic_hash = hashlib.sha256(topic.encode()).hexdigest()[:6]
+    old_run_dir = tmp_path / "artifacts" / f"rc-20260319-100000-{topic_hash}"
+    old_run_dir.mkdir(parents=True)
+    (old_run_dir / "checkpoint.json").write_text(
+        json.dumps({"last_completed_stage": 5, "last_completed_name": "HYPOTHESIS_GEN",
+                     "run_id": old_run_dir.name, "timestamp": "2026-03-19T10:00:00Z"})
+    )
+
+    # Mock execute_pipeline so we don't actually run
+    import researchclaw.pipeline.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "execute_pipeline", lambda **kw: [])
+
+    # Also mock preflight
+    from unittest.mock import MagicMock
+    mock_client = MagicMock()
+    mock_client.preflight.return_value = (True, "OK")
+    import researchclaw.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "create_llm_client", lambda cfg: mock_client)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=None,
+        from_stage=None,
+        auto_approve=False,
+        skip_preflight=True,
+        resume=True,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+    )
+    rc_cli.cmd_run(args)
+    captured = capsys.readouterr()
+    assert "Found existing run to resume" in captured.out
+    assert old_run_dir.name in captured.out
+
+
+def test_resume_no_checkpoint_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """BUG-119: --resume with no matching checkpoint should warn and start new."""
+    monkeypatch.chdir(tmp_path)
+
+    config_path = tmp_path / "config.arc.yaml"
+    _write_valid_config(config_path)
+
+    # Create empty artifacts dir (no checkpoints)
+    (tmp_path / "artifacts").mkdir()
+
+    import researchclaw.pipeline.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "execute_pipeline", lambda **kw: [])
+
+    from unittest.mock import MagicMock
+    mock_client = MagicMock()
+    mock_client.preflight.return_value = (True, "OK")
+    import researchclaw.llm as llm_mod
+    monkeypatch.setattr(llm_mod, "create_llm_client", lambda cfg: mock_client)
+
+    args = argparse.Namespace(
+        config=str(config_path),
+        topic=None,
+        output=None,
+        from_stage=None,
+        auto_approve=False,
+        skip_preflight=True,
+        resume=True,
+        skip_noncritical_stage=False,
+        no_graceful_degradation=False,
+    )
+    rc_cli.cmd_run(args)
+    captured = capsys.readouterr()
+    assert "no checkpoint found" in captured.err
+
+
 def test_main_dispatches_init(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = {}
 

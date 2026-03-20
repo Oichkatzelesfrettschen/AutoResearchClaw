@@ -210,6 +210,35 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     run_id = _generate_run_id(config.research.topic)
     run_dir = Path(output or f"artifacts/{run_id}")
+
+    # BUG-119: When --resume without --output, search for the most recent
+    # existing run directory that matches the topic and has a checkpoint.
+    if resume and not output:
+        topic_hash = hashlib.sha256(config.research.topic.encode()).hexdigest()[:6]
+        artifacts_root = Path("artifacts")
+        if artifacts_root.is_dir():
+            candidates = sorted(
+                (
+                    d for d in artifacts_root.iterdir()
+                    if d.is_dir()
+                    and d.name.startswith("rc-")
+                    and d.name.endswith(f"-{topic_hash}")
+                    and (d / "checkpoint.json").exists()
+                ),
+                key=lambda d: d.name,
+                reverse=True,  # newest first (timestamp in name)
+            )
+            if candidates:
+                run_dir = candidates[0]
+                run_id = run_dir.name
+                print(f"Found existing run to resume: {run_dir}")
+            else:
+                print(
+                    "Warning: --resume specified but no checkpoint found "
+                    f"for topic hash '{topic_hash}'. Starting new run.",
+                    file=sys.stderr,
+                )
+
     run_dir.mkdir(parents=True, exist_ok=True)
 
     if config.knowledge_base.root:

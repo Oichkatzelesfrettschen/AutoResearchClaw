@@ -196,6 +196,183 @@ def _collect_content_metrics(run_dir: Path | None) -> dict[str, object]:
     return metrics
 
 
+logger = logging.getLogger(__name__)
+
+
+def _run_experiment_diagnosis(run_dir: Path, config: RCConfig, run_id: str) -> None:
+    """Run experiment diagnosis after Stage 14 and save reports.
+
+    Produces:
+    - ``run_dir/experiment_diagnosis.json`` — structured diagnosis + quality assessment
+    - ``run_dir/repair_prompt.txt`` — repair instructions (if quality is insufficient)
+    """
+    try:
+        from researchclaw.pipeline.experiment_diagnosis import (
+            diagnose_experiment,
+            assess_experiment_quality,
+        )
+
+        # Find the most recent stage-14 experiment_summary.json
+        summary_path = None
+        for candidate in sorted(run_dir.glob("stage-14*/experiment_summary.json")):
+            summary_path = candidate
+        if not summary_path or not summary_path.exists():
+            return
+
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+        # Collect stdout/stderr from experiment runs
+        stdout, stderr = "", ""
+        runs_dir = summary_path.parent / "runs"
+        if runs_dir.is_dir():
+            for run_file in sorted(runs_dir.glob("*.json"))[:5]:
+                try:
+                    run_data = json.loads(run_file.read_text(encoding="utf-8"))
+                    if isinstance(run_data, dict):
+                        stdout += run_data.get("stdout", "") + "\n"
+                        stderr += run_data.get("stderr", "") + "\n"
+                except (json.JSONDecodeError, OSError):
+                    continue
+
+        # Load experiment plan from stage-09
+        plan = None
+        for candidate in sorted(run_dir.glob("stage-09*/experiment_design.json")):
+            try:
+                plan = json.loads(candidate.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Load refinement log if available
+        ref_log = None
+        for candidate in sorted(run_dir.glob("stage-13*/refinement_log.json")):
+            try:
+                ref_log = json.loads(candidate.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Run diagnosis
+        diag = diagnose_experiment(
+            experiment_summary=summary,
+            experiment_plan=plan,
+            refinement_log=ref_log,
+            stdout=stdout.strip(),
+            stderr=stderr.strip(),
+        )
+
+        # Run quality assessment
+        qa = assess_experiment_quality(summary, ref_log)
+
+        # Save diagnosis report
+        diag_report = {
+            "diagnosis": diag.to_dict(),
+            "quality_assessment": {
+                "mode": qa.mode.value,
+                "sufficient": qa.sufficient,
+                "repair_possible": qa.repair_possible,
+                "deficiency_types": [d.type.value for d in qa.deficiencies],
+            },
+            "repair_needed": not qa.sufficient,
+            "generated": _utcnow_iso(),
+        }
+        (run_dir / "experiment_diagnosis.json").write_text(
+            json.dumps(diag_report, indent=2), encoding="utf-8"
+        )
+
+        if not qa.sufficient:
+            # Generate repair prompt for the REFINE loop
+            from researchclaw.pipeline.experiment_repair import build_repair_prompt
+
+            code: dict[str, str] = {}
+            # Try refined code first, then stage-10 experiment dir, then raw stage-10
+            for _glob_pat in (
+                "stage-13*/experiment_final/*.py",
+                "stage-10*/experiment/*.py",
+                "stage-10*/*.py",
+            ):
+                for candidate in sorted(run_dir.glob(_glob_pat)):
+                    try:
+                        code[candidate.name] = candidate.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        pass
+                if code:
+                    break
+
+            repair_prompt = build_repair_prompt(
+                diag, code, time_budget_sec=config.experiment.time_budget_sec
+            )
+            (run_dir / "repair_prompt.txt").write_text(
+                repair_prompt, encoding="utf-8"
+            )
+            logger.info(
+                "[%s] Experiment diagnosis: mode=%s, deficiencies=%d — repair prompt saved",
+                run_id, qa.mode.value, len(diag.deficiencies),
+            )
+            print(
+                f"[{run_id}] Experiment diagnosis: {qa.mode.value} "
+                f"({len(diag.deficiencies)} issues found, repair needed)"
+            )
+        else:
+            logger.info(
+                "[%s] Experiment diagnosis: mode=%s, sufficient=True — quality OK",
+                run_id, qa.mode.value,
+            )
+            print(f"[{run_id}] Experiment diagnosis: {qa.mode.value} — quality OK")
+
+    except Exception as exc:
+        logger.warning("Experiment diagnosis failed: %s", exc)
+
+
+def _run_experiment_repair(run_dir: Path, config: RCConfig, run_id: str) -> None:
+    """Execute the experiment repair loop when diagnosis finds quality issues.
+
+    Calls the repair loop from ``experiment_repair.py`` which:
+    1. Loads experiment code and diagnosis
+    2. Gets fixes from LLM or OpenCode
+    3. Re-runs experiment in sandbox
+    4. Re-assesses quality
+    5. Repeats up to max_cycles
+    """
+    try:
+        from researchclaw.pipeline.experiment_repair import run_repair_loop
+
+        repair_result = run_repair_loop(
+            run_dir=run_dir,
+            config=config,
+            run_id=run_id,
+        )
+
+        # Save repair result
+        (run_dir / "experiment_repair_result.json").write_text(
+            json.dumps(repair_result.to_dict(), indent=2), encoding="utf-8"
+        )
+
+        if repair_result.success:
+            # Copy best summary as the primary experiment_summary for downstream
+            if repair_result.best_experiment_summary:
+                best_path = run_dir / "stage-14" / "experiment_summary.json"
+                best_path.write_text(
+                    json.dumps(repair_result.best_experiment_summary, indent=2),
+                    encoding="utf-8",
+                )
+                logger.info(
+                    "[%s] Repair loop success — promoted best results to stage-14",
+                    run_id,
+                )
+
+            # Re-run diagnosis with updated results
+            _run_experiment_diagnosis(run_dir, config, run_id)
+        else:
+            logger.info(
+                "[%s] Repair loop completed without reaching full_paper quality "
+                "(best mode: %s, %d cycles)",
+                run_id, repair_result.final_mode.value, repair_result.total_cycles,
+            )
+
+    except Exception as exc:
+        logger.warning("[%s] Experiment repair failed: %s", run_id, exc)
+        print(f"[{run_id}] Experiment repair failed: {exc}")
+
+
 def execute_pipeline(
     *,
     run_dir: Path,
@@ -306,6 +483,24 @@ def execute_pipeline(
 
         if result.status == StageStatus.DONE:
             _write_checkpoint(run_dir, stage, run_id)
+
+        # --- Experiment diagnosis + repair after Stage 14 (result_analysis) ---
+        if (
+            stage == Stage.RESULT_ANALYSIS
+            and result.status == StageStatus.DONE
+            and config.experiment.repair.enabled
+        ):
+            _run_experiment_diagnosis(run_dir, config, run_id)
+
+            # Check if repair loop should run
+            _diag_path = run_dir / "experiment_diagnosis.json"
+            if _diag_path.exists():
+                try:
+                    _diag_data = json.loads(_diag_path.read_text(encoding="utf-8"))
+                    if _diag_data.get("repair_needed"):
+                        _run_experiment_repair(run_dir, config, run_id)
+                except (json.JSONDecodeError, OSError):
+                    pass
 
         # --- Heartbeat for sentinel watchdog ---
         _write_heartbeat(run_dir, stage, run_id)

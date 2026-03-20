@@ -411,9 +411,10 @@ class CodeGenAgent(BaseAgent):
 
     name = "figure_codegen"
 
-    def __init__(self, llm: Any, *, output_format: str = "python") -> None:
+    def __init__(self, llm: Any, *, output_format: str = "python", use_docker: bool = False) -> None:
         super().__init__(llm)
         self._output_format = output_format  # "python" or "latex"
+        self._use_docker = use_docker  # BUG-60: generate Docker paths when True
 
     # ------------------------------------------------------------------
     # Public API
@@ -504,7 +505,12 @@ class CodeGenAgent(BaseAgent):
         """Generate a plotting script for a single figure."""
         figure_id = sanitize_figure_id(fig_spec.get("figure_id", "figure"))
         # BUG-20: Use absolute path to avoid CWD-relative savefig errors
-        output_path = str((Path(output_dir) / f"{figure_id}.png").resolve())
+        # BUG-60: When running in Docker, use container path directly so
+        # renderer doesn't need fragile regex rewriting of host paths.
+        if self._use_docker:
+            output_path = f"/workspace/output/{figure_id}.png"
+        else:
+            output_path = str((Path(output_dir) / f"{figure_id}.png").resolve())
         title = fig_spec.get("title", "")
         x_label = fig_spec.get("x_label", "")
         y_label = fig_spec.get("y_label", "")

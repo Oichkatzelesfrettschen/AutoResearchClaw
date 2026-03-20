@@ -314,8 +314,10 @@ class LLMClient:
                     continue
                 raise
 
-        # Should not reach here, but just in case
-        return self._raw_call(model, messages, max_tokens, temperature, json_mode)
+        # All retries exhausted
+        raise RuntimeError(
+            f"LLM call failed after {self.config.max_retries} retries for model {model}"
+        )
 
     def _raw_call(
         self,

@@ -188,12 +188,13 @@ class TestOpenCodeBridge:
             time_budget_sec=300,
         )
         cfg = json.loads((ws / "opencode.json").read_text())
-        assert cfg["model"] == "azure/gpt-5.2"
+        # Azure now uses the unified "openai" provider (Bearer token auth
+        # works on Azure endpoints and Responses API is supported)
+        assert cfg["model"] == "openai/gpt-5.2"
         assert "provider" in cfg
-        assert "azure" in cfg["provider"]
-        assert cfg["provider"]["azure"]["options"]["baseURL"] == "https://huaxi.openai.azure.com/openai"
-        assert "{env:AZURE_OPENAI_API_KEY}" in cfg["provider"]["azure"]["options"]["apiKey"]
-        assert cfg["provider"]["azure"]["options"]["resourceName"] == "huaxi"
+        assert "openai" in cfg["provider"]
+        assert cfg["provider"]["openai"]["options"]["baseURL"] == "https://huaxi.openai.azure.com/openai/v1"
+        assert "{env:AZURE_OPENAI_API_KEY}" in cfg["provider"]["openai"]["options"]["apiKey"]
 
     def test_opencode_config_openai_format(self, tmp_path):
         bridge = OpenCodeBridge(
@@ -235,15 +236,15 @@ class TestOpenCodeBridge:
         # Should be "anthropic/claude-sonnet-4-6", NOT "azure/anthropic/claude-sonnet-4-6"
         assert cfg["model"] == "anthropic/claude-sonnet-4-6"
 
-    def test_resolve_model_azure_fallback(self):
-        """Azure endpoint without explicit model → falls back to Anthropic (BUG-61 fix)."""
+    def test_resolve_model_azure_uses_openai_prefix(self):
+        """Azure endpoint → uses openai/ prefix (Azure supports Responses API now)."""
         bridge = OpenCodeBridge(
             model="gpt-5.2",
             llm_base_url="https://huaxi.openai.azure.com/openai/v1",
             llm_provider="azure",
         )
         resolved = bridge._resolve_opencode_model()
-        assert resolved == "anthropic/claude-sonnet-4-6"
+        assert resolved == "openai/gpt-5.2"
 
     def test_resolve_model_preserves_explicit_prefix(self):
         """Model with '/' prefix should be used as-is regardless of provider."""

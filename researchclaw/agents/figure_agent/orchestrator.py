@@ -152,7 +152,11 @@ class FigureOrchestrator(AgentOrchestrator):
             min_figures=cfg.min_figures,
             max_figures=cfg.max_figures,
         )
-        self._codegen = CodeGenAgent(llm, output_format=cfg.output_format)
+        # BUG-60: Pass use_docker so CodeGen generates container-aware paths
+        self._codegen = CodeGenAgent(
+            llm, output_format=cfg.output_format,
+            use_docker=bool(cfg.use_docker) if cfg.use_docker is not None else False,
+        )
         self._renderer = RendererAgent(
             llm,
             timeout_sec=cfg.render_timeout_sec,

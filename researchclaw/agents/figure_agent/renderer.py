@@ -301,7 +301,8 @@ class RendererAgent(BaseAgent):
 
         This prevents RCE from LLM-generated visualization code.
         """
-        container_name = f"rc-viz-{figure_id}-{os.getpid()}"
+        import uuid as _uuid_renderer
+        container_name = f"rc-viz-{figure_id}-{os.getpid()}-{_uuid_renderer.uuid4().hex[:8]}"
 
         cmd = [
             "docker", "run",

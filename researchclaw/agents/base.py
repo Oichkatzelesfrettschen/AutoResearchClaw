@@ -140,13 +140,22 @@ class BaseAgent:
                 return _as_dict(json.loads(m.group(1)))
             except (json.JSONDecodeError, ValueError):
                 pass
-        # 3. First { ... } block
-        m = re.search(r"\{[\s\S]*\}", text)
-        if m:
-            try:
-                return _as_dict(json.loads(m.group(0)))
-            except (json.JSONDecodeError, ValueError):
-                pass
+        # 3. First balanced { ... } block (BUG-DA6-07: use non-greedy brace matching)
+        depth = 0
+        start_idx = -1
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    start_idx = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and start_idx >= 0:
+                    candidate = text[start_idx : i + 1]
+                    try:
+                        return _as_dict(json.loads(candidate))
+                    except (json.JSONDecodeError, ValueError):
+                        start_idx = -1  # try next top-level block
         return None
 
     # -- Subclass API ------------------------------------------------------
@@ -158,12 +167,17 @@ class BaseAgent:
     def _make_result(
         self, success: bool, data: dict[str, Any] | None = None, error: str = "",
     ) -> AgentStepResult:
+        # BUG-DA6-01: Return per-call delta, then reset counters to avoid
+        # double-counting when the same agent instance is reused across retries.
+        calls, tokens = self._calls, self._tokens
+        self._calls = 0
+        self._tokens = 0
         return AgentStepResult(
             success=success,
             data=data or {},
             error=error,
-            llm_calls=self._calls,
-            token_usage=self._tokens,
+            llm_calls=calls,
+            token_usage=tokens,
         )
 
 
