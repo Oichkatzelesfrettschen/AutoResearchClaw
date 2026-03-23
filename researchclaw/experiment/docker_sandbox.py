@@ -424,6 +424,12 @@ class DockerSandbox:
         # can download pretrained model weights (e.g., Inception-v3 for FID).
         cmd.extend(["-e", "TORCH_HOME=/workspace/.cache/torch"])
 
+        # BUG-R52-03: Set HOME to a writable directory.  The container runs
+        # as the host user (--user UID:GID) whose HOME defaults to "/" when
+        # no matching passwd entry exists.  pip --user then fails with
+        # "Permission denied: '/.local'".
+        cmd.extend(["-e", "HOME=/workspace/.home"])
+
         # Pass HF token if available (for gated model downloads)
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
         if hf_token:
@@ -497,12 +503,13 @@ class DockerSandbox:
         import_re = re.compile(
             r"^\s*(?:import|from)\s+([\w.]+)", re.MULTILINE
         )
-        # Exclude local project modules (any .py file in staging_dir)
+        # Exclude local project modules (any .py file in staging_dir, recursive)
+        # BUG-DA8-13: Use rglob to also scan subdirectories
         local_modules = {
-            pyf.stem for pyf in staging_dir.glob("*.py")
+            pyf.stem for pyf in staging_dir.rglob("*.py")
         }
         detected: list[str] = []
-        for pyf in staging_dir.glob("*.py"):
+        for pyf in staging_dir.rglob("*.py"):
             if pyf.name == "setup.py":
                 continue  # Don't scan setup.py for experiment deps
             text = pyf.read_text(encoding="utf-8", errors="replace")

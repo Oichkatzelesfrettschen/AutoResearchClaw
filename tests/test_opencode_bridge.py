@@ -385,6 +385,118 @@ class TestOpenCodeBridge:
 
 
 # ============================================================
+# TestEnsureMainEntryPoint (BUG-R52-01)
+# ============================================================
+
+
+class TestHasMainGuard:
+    """Tests for _has_main_guard static method."""
+
+    def test_with_guard(self):
+        code = 'def main():\n    pass\n\nif __name__ == "__main__":\n    main()\n'
+        assert OpenCodeBridge._has_main_guard(code) is True
+
+    def test_without_guard(self):
+        code = "def main():\n    pass\n"
+        assert OpenCodeBridge._has_main_guard(code) is False
+
+    def test_syntax_error(self):
+        assert OpenCodeBridge._has_main_guard("def broken(") is False
+
+    def test_empty(self):
+        assert OpenCodeBridge._has_main_guard("") is False
+
+    def test_single_quote_guard(self):
+        code = "if __name__ == '__main__':\n    print('hi')\n"
+        assert OpenCodeBridge._has_main_guard(code) is True
+
+
+class TestEnsureMainEntryPoint:
+    """Tests for _ensure_main_entry_point — BUG-R52-01 fix."""
+
+    def test_already_has_guard_unchanged(self):
+        files = {
+            "main.py": 'def run():\n    pass\n\nif __name__ == "__main__":\n    run()\n',
+            "utils.py": "def helper(): pass\n",
+        }
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        assert result is files  # Same object, unchanged
+
+    def test_no_main_py_unchanged(self):
+        files = {"utils.py": "def helper(): pass\n"}
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        assert result is files
+
+    def test_swap_entry_point_from_other_file(self):
+        """When main.py is library-only and another file has __main__, swap."""
+        lib_code = "class Model:\n    pass\n\ndef train(model):\n    pass\n"
+        entry_code = (
+            'from main import Model, train\n\n'
+            'if __name__ == "__main__":\n'
+            '    m = Model()\n'
+            '    train(m)\n'
+        )
+        files = {
+            "main.py": lib_code,
+            "run_experiment.py": entry_code,
+        }
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        # main.py should now contain the entry point code
+        assert '__main__' in result["main.py"]
+        # The old main.py content should be in run_experiment.py
+        assert result["run_experiment.py"] == lib_code
+
+    def test_inject_entry_for_main_function(self):
+        """When main.py defines main() but no guard, inject one."""
+        code = "import torch\n\ndef main():\n    print('training')\n"
+        files = {"main.py": code}
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        assert '__main__' in result["main.py"]
+        assert "main()" in result["main.py"]
+
+    def test_inject_entry_for_run_function(self):
+        """Should also detect run(), train(), etc."""
+        code = "def run_experiment():\n    print('running')\n"
+        files = {"main.py": code}
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        assert '__main__' in result["main.py"]
+        assert "run_experiment()" in result["main.py"]
+
+    def test_no_known_entry_function_warns(self):
+        """When no known entry function exists, return unchanged with warning."""
+        code = "class Config:\n    x = 1\n\nclass Trainer:\n    pass\n"
+        files = {"main.py": code}
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        # Should return unchanged since no entry function found
+        assert result["main.py"] == code
+
+    def test_non_py_files_not_checked(self):
+        """requirements.txt and setup.py should not be checked for __main__."""
+        lib_code = "class Model:\n    pass\n"
+        files = {
+            "main.py": lib_code,
+            "requirements.txt": "torch>=2.0\n",
+            "setup.py": "# setup\n",
+        }
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        # No swap should occur — only .py files are checked
+        assert result["main.py"] == lib_code
+
+    def test_swap_preserves_other_files(self):
+        """Swapping should not lose any files from the dict."""
+        files = {
+            "main.py": "class Lib: pass\n",
+            "run.py": 'if __name__ == "__main__":\n    print("go")\n',
+            "utils.py": "def helper(): pass\n",
+            "requirements.txt": "numpy\n",
+        }
+        result = OpenCodeBridge._ensure_main_entry_point(files)
+        assert len(result) == len(files)
+        assert "utils.py" in result
+        assert "requirements.txt" in result
+
+
+# ============================================================
 # TestOpenCodeConfig
 # ============================================================
 
