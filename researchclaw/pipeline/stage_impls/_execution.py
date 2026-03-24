@@ -120,7 +120,10 @@ def _execute_experiment_run(
     if exp_dir_path and Path(exp_dir_path).is_dir():
         main_path = Path(exp_dir_path) / "main.py"
         if main_path.exists():
-            code_text = main_path.read_text(encoding="utf-8")
+            try:
+                code_text = main_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                code_text = ""
     if not code_text:
         code_text = _read_prior_artifact(run_dir, "experiment.py") or ""
 

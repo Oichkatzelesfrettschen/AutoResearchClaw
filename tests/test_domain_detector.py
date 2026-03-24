@@ -32,7 +32,7 @@ class TestProfileLoading:
     def test_load_all_profiles_returns_dict(self):
         profiles = load_all_profiles()
         assert isinstance(profiles, dict)
-        assert len(profiles) >= 10  # we created 14 profiles
+        assert len(profiles) >= 10  # currently 24 profiles
 
     def test_profiles_have_required_fields(self):
         profiles = load_all_profiles()

@@ -356,16 +356,20 @@ class OpenCodeBridge:
             )
             if r.returncode != 0:
                 raise OSError(f"git init failed: {r.stderr}")
-            subprocess.run(
+            r = subprocess.run(
                 ["git", "add", "-A"],
                 cwd=str(ws), capture_output=True, timeout=10,
             )
-            subprocess.run(
+            if r.returncode != 0:
+                raise OSError(f"git add failed: {r.stderr}")
+            r = subprocess.run(
                 ["git", "-c", "user.email=beast@researchclaw",
                  "-c", "user.name=BeastMode",
                  "commit", "-m", "init workspace"],
                 cwd=str(ws), capture_output=True, timeout=10,
             )
+            if r.returncode != 0:
+                raise OSError(f"git commit failed: {r.stderr}")
         except subprocess.TimeoutExpired as exc:
             raise OSError(f"git workspace init timed out: {exc}") from exc
 
