@@ -9,7 +9,9 @@ from typing import Any
 import sys
 import yaml
 
-DEFAULT_PYTHON_PATH = ".venv/Scripts/python.exe" if sys.platform == "win32" else ".venv/bin/python3"
+DEFAULT_PYTHON_PATH = (
+    ".venv/Scripts/python.exe" if sys.platform == "win32" else ".venv/bin/python3"
+)
 
 CONFIG_SEARCH_ORDER: tuple[str, ...] = ("config.arc.yaml", "config.yaml")
 
@@ -32,8 +34,11 @@ def _validate_network_policy(val: object, default: str = "setup_only") -> str:
     s = str(val).strip().lower() if val else default
     if s not in _VALID_NETWORK_POLICIES:
         import logging as _cfg_log
+
         _cfg_log.getLogger(__name__).warning(
-            "Invalid network_policy %r, using %r", val, default,
+            "Invalid network_policy %r, using %r",
+            val,
+            default,
         )
         return default
     return s
@@ -48,12 +53,15 @@ def _safe_float(val: Any, default: float) -> float:
         return default
     try:
         import math
+
         result = float(val)
         if not math.isfinite(result):
             return default
         return result
     except (ValueError, TypeError):
         return default
+
+
 EXAMPLE_CONFIG = "config.researchclaw.example.yaml"
 
 
@@ -87,7 +95,14 @@ KB_SUBDIRS = (
 )
 PROJECT_MODES = {"docs-first", "semi-auto", "full-auto"}
 KB_BACKENDS = {"markdown", "obsidian"}
-EXPERIMENT_MODES = {"simulated", "sandbox", "docker", "ssh_remote", "colab_drive", "agentic"}
+EXPERIMENT_MODES = {
+    "simulated",
+    "sandbox",
+    "docker",
+    "ssh_remote",
+    "colab_drive",
+    "agentic",
+}
 CLI_AGENT_PROVIDERS = {"llm", "claude_code", "codex"}
 
 
@@ -176,6 +191,7 @@ class AcpConfig:
 class LlmConfig:
     provider: str
     base_url: str = ""
+    wire_api: str = "chat_completions"
     api_key_env: str = ""
     api_key: str = ""
     primary_model: str = ""
@@ -395,8 +411,8 @@ class CliAgentConfig:
     """
 
     provider: str = "llm"
-    binary_path: str = ""       # auto-detected via PATH if empty
-    model: str = ""             # model override for the CLI agent
+    binary_path: str = ""  # auto-detected via PATH if empty
+    model: str = ""  # model override for the CLI agent
     max_budget_usd: float = 5.0
     timeout_sec: int = 600
     extra_args: tuple[str, ...] = ()
@@ -484,6 +500,7 @@ class ExportConfig:
     target_conference: str = "neurips_2025"
     authors: str = "Anonymous"
     bib_file: str = "references"
+
 
 @dataclass(frozen=True)
 class PromptsConfig:
@@ -619,7 +636,6 @@ class OverleafConfig:
     poll_interval_sec: int = 300
 
 
-
 COPILOT_MODES = ("co-pilot", "auto-pilot", "zero-touch")
 
 
@@ -654,7 +670,11 @@ class QualityAssessorConfig:
 
     enabled: bool = True
     dimensions: tuple[str, ...] = (
-        "novelty", "rigor", "clarity", "impact", "experiments"
+        "novelty",
+        "rigor",
+        "clarity",
+        "impact",
+        "experiments",
     )
     venue_recommendation: bool = True
     score_history: bool = True
@@ -684,9 +704,7 @@ class RCConfig:
     export: ExportConfig = field(default_factory=ExportConfig)
     prompts: PromptsConfig = field(default_factory=PromptsConfig)
     web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
-    metaclaw_bridge: MetaClawBridgeConfig = field(
-        default_factory=MetaClawBridgeConfig
-    )
+    metaclaw_bridge: MetaClawBridgeConfig = field(default_factory=MetaClawBridgeConfig)
     # Agent B: Intelligence & Memory
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     skills: SkillsConfig = field(default_factory=SkillsConfig)
@@ -702,7 +720,9 @@ class RCConfig:
     # Agent D: Research Enhancement
     trends: TrendsConfig = field(default_factory=TrendsConfig)
     copilot: CoPilotConfig = field(default_factory=CoPilotConfig)
-    quality_assessor: QualityAssessorConfig = field(default_factory=QualityAssessorConfig)
+    quality_assessor: QualityAssessorConfig = field(
+        default_factory=QualityAssessorConfig
+    )
     calendar: CalendarConfig = field(default_factory=CalendarConfig)
 
     def to_dict(self) -> dict[str, Any]:
@@ -808,10 +828,14 @@ class RCConfig:
             web_search=WebSearchConfig(
                 enabled=bool(web_search.get("enabled", True)),
                 tavily_api_key=str(web_search.get("tavily_api_key", "")),
-                tavily_api_key_env=str(web_search.get("tavily_api_key_env", "TAVILY_API_KEY")),
+                tavily_api_key_env=str(
+                    web_search.get("tavily_api_key_env", "TAVILY_API_KEY")
+                ),
                 enable_scholar=bool(web_search.get("enable_scholar", True)),
                 enable_crawling=bool(web_search.get("enable_crawling", True)),
-                enable_pdf_extraction=bool(web_search.get("enable_pdf_extraction", True)),
+                enable_pdf_extraction=bool(
+                    web_search.get("enable_pdf_extraction", True)
+                ),
                 max_web_results=int(web_search.get("max_web_results", 10)),
                 max_scholar_results=int(web_search.get("max_scholar_results", 10)),
                 max_crawl_urls=int(web_search.get("max_crawl_urls", 5)),
@@ -882,6 +906,13 @@ def validate_config(
     if not _is_blank(kb_backend) and kb_backend not in KB_BACKENDS:
         errors.append(f"Invalid knowledge_base.backend: {kb_backend}")
 
+    llm_wire_api = _get_by_path(data, "llm.wire_api")
+    if not _is_blank(llm_wire_api) and llm_wire_api not in (
+        "chat_completions",
+        "responses",
+    ):
+        errors.append(f"Invalid llm.wire_api: {llm_wire_api}")
+
     hitl_required_stages = _get_by_path(data, "security.hitl_required_stages")
     if hitl_required_stages is not None:
         if not isinstance(hitl_required_stages, list):
@@ -902,7 +933,10 @@ def validate_config(
         errors.append(f"Invalid experiment.metric_direction: {exp_direction}")
 
     cli_agent_provider = _get_by_path(data, "experiment.cli_agent.provider")
-    if not _is_blank(cli_agent_provider) and cli_agent_provider not in CLI_AGENT_PROVIDERS:
+    if (
+        not _is_blank(cli_agent_provider)
+        and cli_agent_provider not in CLI_AGENT_PROVIDERS
+    ):
         errors.append(f"Invalid experiment.cli_agent.provider: {cli_agent_provider}")
 
     kb_root_raw = _get_by_path(data, "knowledge_base.root")
@@ -926,6 +960,7 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
     return LlmConfig(
         provider=data.get("provider", "openai-compatible"),
         base_url=data.get("base_url", ""),
+        wire_api=data.get("wire_api", "chat_completions"),
         api_key_env=data.get("api_key_env", ""),
         api_key=data.get("api_key", ""),
         primary_model=data.get("primary_model", ""),
@@ -986,9 +1021,7 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
         docker=DockerSandboxConfig(
             image=docker_data.get("image", "researchclaw/experiment:latest"),
             gpu_enabled=bool(docker_data.get("gpu_enabled", True)),
-            gpu_device_ids=tuple(
-                int(g) for g in docker_data.get("gpu_device_ids", ())
-            ),
+            gpu_device_ids=tuple(int(g) for g in docker_data.get("gpu_device_ids", ())),
             memory_limit_mb=_safe_int(docker_data.get("memory_limit_mb"), 8192),
             network_policy=_validate_network_policy(
                 docker_data.get("network_policy", "setup_only"),
@@ -1015,7 +1048,9 @@ def _parse_experiment_config(data: dict[str, Any]) -> ExperimentConfig:
             docker_network_policy=_validate_network_policy(
                 ssh_data.get("docker_network_policy", "none"),
             ),
-            docker_memory_limit_mb=_safe_int(ssh_data.get("docker_memory_limit_mb"), 8192),
+            docker_memory_limit_mb=_safe_int(
+                ssh_data.get("docker_memory_limit_mb"), 8192
+            ),
             docker_shm_size_mb=_safe_int(ssh_data.get("docker_shm_size_mb"), 2048),
             timeout_sec=_safe_int(ssh_data.get("timeout_sec"), 600),
             scp_timeout_sec=_safe_int(ssh_data.get("scp_timeout_sec"), 300),
@@ -1067,9 +1102,7 @@ def _parse_figure_agent_config(data: dict[str, Any]) -> FigureAgentConfig:
         max_figures=_safe_int(data.get("max_figures"), 8),
         max_iterations=_safe_int(data.get("max_iterations"), 3),
         render_timeout_sec=_safe_int(data.get("render_timeout_sec"), 30),
-        use_docker=(
-            None if use_docker_raw is None else bool(use_docker_raw)
-        ),
+        use_docker=(None if use_docker_raw is None else bool(use_docker_raw)),
         docker_image=data.get("docker_image", "researchclaw/experiment:latest"),
         output_format=data.get("output_format", "python"),
         gemini_api_key=data.get("gemini_api_key", ""),
@@ -1106,7 +1139,6 @@ def _parse_cli_agent_config(data: dict[str, Any]) -> CliAgentConfig:
     )
 
 
-
 def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
     if not data:
         return CodeAgentConfig()
@@ -1115,7 +1147,9 @@ def _parse_code_agent_config(data: dict[str, Any]) -> CodeAgentConfig:
         architecture_planning=bool(data.get("architecture_planning", True)),
         sequential_generation=bool(data.get("sequential_generation", True)),
         hard_validation=bool(data.get("hard_validation", True)),
-        hard_validation_max_repairs=_safe_int(data.get("hard_validation_max_repairs"), 4),
+        hard_validation_max_repairs=_safe_int(
+            data.get("hard_validation_max_repairs"), 4
+        ),
         exec_fix_max_iterations=_safe_int(data.get("exec_fix_max_iterations"), 3),
         exec_fix_timeout_sec=_safe_int(data.get("exec_fix_timeout_sec"), 60),
         tree_search_enabled=bool(data.get("tree_search_enabled", False)),
@@ -1306,8 +1340,6 @@ def _parse_dashboard_config(data: dict[str, Any]) -> DashboardConfig:
     )
 
 
-
-
 def _parse_trends_config(data: dict[str, Any]) -> TrendsConfig:
     if not data:
         return TrendsConfig()
@@ -1344,7 +1376,9 @@ def _parse_copilot_config(data: dict[str, Any]) -> CoPilotConfig:
 def _parse_quality_assessor_config(data: dict[str, Any]) -> QualityAssessorConfig:
     if not data:
         return QualityAssessorConfig()
-    dimensions = data.get("dimensions", ("novelty", "rigor", "clarity", "impact", "experiments"))
+    dimensions = data.get(
+        "dimensions", ("novelty", "rigor", "clarity", "impact", "experiments")
+    )
     if isinstance(dimensions, list):
         dimensions = tuple(dimensions)
     return QualityAssessorConfig(
