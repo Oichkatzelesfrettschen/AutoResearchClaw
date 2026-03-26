@@ -1053,30 +1053,47 @@ def _build_context_preamble(
                         f"\n### LaTeX Table\n```latex\n{summary['latex_table']}\n```"
                     )
     if include_kb:
-        # Inject pre-existing knowledge base files so stages that design or
-        # execute experiments can use real data rather than generating synthetic
-        # stand-ins.  Files are listed in priority order; missing files are
-        # silently skipped.  Each file is capped at 3000 chars to keep the
-        # preamble manageable.
-        _kb_files = _read_kb_files(
-            getattr(config.knowledge_base, "root", ""),
-            [
-                "experiments_summary.md",
-                "data_inventory.md",
-                "compute_inventory.md",
-                "claims_summary.md",
-                "insights_summary.md",
-            ],
-        )
-        if _kb_files:
-            parts.append("\n## Knowledge Base (pre-existing project results)")
+        # Inject pre-existing knowledge base into the context preamble.
+        # Priority: if a merged monograph exists in docs/, use it as the
+        # single authoritative source (higher char cap).  Otherwise fall
+        # back to the five individual KB files.
+        _kb_root = getattr(config.knowledge_base, "root", "")
+        _monograph_path = Path(_kb_root).parent / "MERGED_MONOGRAPH.md" if _kb_root else None
+        _monograph_text = ""
+        if _monograph_path and _monograph_path.is_file():
+            try:
+                _monograph_text = _monograph_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                pass
+        if _monograph_text:
+            parts.append("\n## Knowledge Base (merged monograph -- single authoritative source)")
             parts.append(
-                "IMPORTANT: The following files document REAL experimental results "
-                "and REAL data that already exist in this project. Use these results "
-                "directly rather than generating synthetic data or placeholder values."
+                "IMPORTANT: The following monograph integrates ALL experimental results, "
+                "claims, insights, formal proofs, and analysis from this project. Use "
+                "these results directly rather than generating synthetic data or "
+                "placeholder values."
             )
-            for _kb_fname, _kb_text in _kb_files:
-                parts.append(f"\n### {_kb_fname}\n{_kb_text}")
+            parts.append(f"\n### MERGED_MONOGRAPH.md\n{_monograph_text[:12000]}")
+        else:
+            _kb_files = _read_kb_files(
+                _kb_root,
+                [
+                    "experiments_summary.md",
+                    "data_inventory.md",
+                    "compute_inventory.md",
+                    "claims_summary.md",
+                    "insights_summary.md",
+                ],
+            )
+            if _kb_files:
+                parts.append("\n## Knowledge Base (pre-existing project results)")
+                parts.append(
+                    "IMPORTANT: The following files document REAL experimental results "
+                    "and REAL data that already exist in this project. Use these results "
+                    "directly rather than generating synthetic data or placeholder values."
+                )
+                for _kb_fname, _kb_text in _kb_files:
+                    parts.append(f"\n### {_kb_fname}\n{_kb_text}")
     return "\n".join(parts)
 
 
@@ -3147,20 +3164,37 @@ def _execute_code_generation(
     # --- Dataset guidance + setup script + HP reporting (docker/sandbox modes) ---
     extra_guidance = ""
 
-    # Inject KB files that list pre-built binaries and existing datasets so the
-    # code agent can call real executables instead of generating synthetic data.
-    _kb_for_code = _read_kb_files(
-        getattr(config.knowledge_base, "root", ""),
-        ["compute_inventory.md", "data_inventory.md", "experiments_summary.md"],
-        max_chars_each=2000,
-    )
-    if _kb_for_code:
+    # Inject pre-existing project resources so the code agent can call real
+    # executables instead of generating synthetic data.  Prefer the merged
+    # monograph when it exists; fall back to individual KB files.
+    _kb_root_code = getattr(config.knowledge_base, "root", "")
+    _mono_code_path = Path(_kb_root_code).parent / "MERGED_MONOGRAPH.md" if _kb_root_code else None
+    _mono_code_text = ""
+    if _mono_code_path and _mono_code_path.is_file():
+        try:
+            _mono_code_text = _mono_code_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            pass
+    if _mono_code_text:
         extra_guidance += (
-            "\n\n## Pre-existing Project Resources (USE THESE — do not generate synthetic data)\n"
-            "The following files describe real data and pre-built binaries available for this experiment.\n"
+            "\n\n## Pre-existing Project Resources (merged monograph -- single source of truth)\n"
+            "The monograph below integrates ALL experimental results, data inventories, "
+            "compute resources, claims, and insights. Use these directly.\n"
         )
-        for _kb_fn, _kb_txt in _kb_for_code:
-            extra_guidance += f"\n### {_kb_fn}\n{_kb_txt}\n"
+        extra_guidance += f"\n### MERGED_MONOGRAPH.md\n{_mono_code_text[:8000]}\n"
+    else:
+        _kb_for_code = _read_kb_files(
+            _kb_root_code,
+            ["compute_inventory.md", "data_inventory.md", "experiments_summary.md"],
+            max_chars_each=2000,
+        )
+        if _kb_for_code:
+            extra_guidance += (
+                "\n\n## Pre-existing Project Resources (USE THESE -- do not generate synthetic data)\n"
+                "The following files describe real data and pre-built binaries available for this experiment.\n"
+            )
+            for _kb_fn, _kb_txt in _kb_for_code:
+                extra_guidance += f"\n### {_kb_fn}\n{_kb_txt}\n"
 
     _net_policy = getattr(getattr(config, "docker", None), "network_policy", "setup_only")
     if config.experiment.mode in ("sandbox", "docker"):
