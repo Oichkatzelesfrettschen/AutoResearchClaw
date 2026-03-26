@@ -51,8 +51,6 @@ docs/OPTIMIZATION_PLAN*.md
 docs/MULTI_CASE_EVALUATION*.md
 docs/pipeline_quality_issues*.md
 docs/autobench-loop.md
-RESEARCHCLAW_AGENTS.md
-RESEARCHCLAW_CLAUDE.md
 
 # Task-specific config files (keep example template only)
 config_agent_*.yaml
